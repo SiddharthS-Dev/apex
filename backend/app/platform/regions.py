@@ -86,27 +86,49 @@ def configured_regions(settings: Settings | None = None) -> frozenset[str]:
     return frozenset(database_urls(settings))
 
 
+#: Keyed by the resolved **URL**, not by region name.
+#:
+#: Keying by region looked natural and was wrong: two callers naming the same
+#: region with different configuration -- a reconfigured deployment, or a test
+#: pointing at a different database -- received whichever engine happened to be
+#: built first, silently talking to the wrong database. The URL is what an
+#: engine actually is, so it is what identifies one.
 _engines: dict[str, AsyncEngine] = {}
+
+
+def resolve_region_url(
+    region: str | None = None,
+    settings: Settings | None = None,
+) -> tuple[str, str]:
+    """Return ``(region, url)`` for a region, refusing an unconfigured one."""
+    settings = settings or get_settings()
+    target = region or settings.default_region
+
+    urls = database_urls(settings)
+    if target not in urls:
+        raise UnknownRegionError(
+            f"No database configured for region {target!r}; "
+            f"configured regions are {sorted(urls)}"
+        )
+    return target, urls[target]
 
 
 def get_engine_for_region(
     region: str | None = None,
     settings: Settings | None = None,
 ) -> AsyncEngine:
-    """Return the engine serving one region, creating it on first use."""
-    settings = settings or get_settings()
-    target = region or settings.default_region
+    """Return the engine serving one region, creating it on first use.
 
-    if target not in _engines:
-        urls = database_urls(settings)
-        if target not in urls:
-            raise UnknownRegionError(
-                f"No database configured for region {target!r}; "
-                f"configured regions are {sorted(urls)}"
-            )
-        _engines[target] = create_engine_for_url(urls[target], settings)
+    The unconfigured-region check runs on **every** call, not only on a cache
+    miss. Otherwise a region that was once configured would keep resolving from
+    the cache after it had been removed from configuration.
+    """
+    _, url = resolve_region_url(region, settings)
 
-    return _engines[target]
+    if url not in _engines:
+        _engines[url] = create_engine_for_url(url, settings or get_settings())
+
+    return _engines[url]
 
 
 def get_session_factory_for_region(

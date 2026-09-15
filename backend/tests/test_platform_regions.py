@@ -77,7 +77,7 @@ def test_unknown_region_is_rejected() -> None:
         regions.get_engine_for_region("atlantis-1", settings)
 
 
-def test_engine_is_reused_for_a_region() -> None:
+def test_engine_is_reused_for_the_same_database() -> None:
     settings = Settings(
         default_region="local", database_urls="local=postgresql+psycopg://u:p@h/db"
     )
@@ -86,6 +86,46 @@ def test_engine_is_reused_for_a_region() -> None:
     second = regions.get_engine_for_region("local", settings)
 
     assert first is second
+
+
+def test_the_same_region_name_on_a_different_database_gets_a_different_engine() -> None:
+    """Regression. The cache was keyed by region name, so the second caller
+    received the first caller's engine and silently used the wrong database."""
+    one = Settings(default_region="local", database_urls="local=postgresql+psycopg://a/one")
+    two = Settings(default_region="local", database_urls="local=postgresql+psycopg://b/two")
+
+    first = regions.get_engine_for_region("local", one)
+    second = regions.get_engine_for_region("local", two)
+
+    assert str(first.url) != str(second.url)
+    assert "one" in str(first.url)
+    assert "two" in str(second.url)
+
+
+def test_a_region_removed_from_configuration_stops_resolving() -> None:
+    """Regression. The unconfigured-region check only ran on a cache miss, so a
+    region kept resolving after it had been removed from configuration."""
+    configured = Settings(
+        default_region="local", database_urls="local=postgresql+psycopg://c/three"
+    )
+    regions.get_engine_for_region("local", configured)
+
+    removed = Settings(
+        default_region="other", database_urls="other=postgresql+psycopg://d/four"
+    )
+    with pytest.raises(UnknownRegionError, match="local"):
+        regions.get_engine_for_region("local", removed)
+
+
+def test_resolve_region_url_reports_both_parts() -> None:
+    settings = Settings(
+        default_region="local", database_urls="local=postgresql+psycopg://e/five"
+    )
+
+    region, url = regions.resolve_region_url(None, settings)
+
+    assert region == "local"
+    assert url == "postgresql+psycopg://e/five"
 
 
 # --- Bucket map parsing --------------------------------------------------

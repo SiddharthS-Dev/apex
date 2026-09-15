@@ -20,6 +20,13 @@ them is a common and expensive mistake:
 guess into a contract that other systems then depend on -- the most expensive
 possible place for one. See :mod:`app.events.registry`.
 
+**Context is captured at construction, never at parsing.** ``build_envelope``
+reads the ambient correlation and causation ids; the model itself has no default
+factories for them. That distinction matters: a default factory runs on
+``model_validate`` too, so an envelope arriving from another system without a
+causation id would silently inherit the causation of whatever this process
+happened to be doing.
+
 **No ordering guarantee.** Events are not globally ordered, not ordered per
 tenant, and not ordered per aggregate. Nothing in the requirements specifies an
 ordering guarantee, so none is offered: a consumer that needs order must derive
@@ -82,8 +89,16 @@ class EventEnvelope(BaseModel):
     actor_type: str | None = Field(default=None, max_length=32)
     actor_id: uuid.UUID | None = None
 
-    correlation_id: uuid.UUID = Field(default_factory=correlation_id_or_new)
-    causation_id: uuid.UUID | None = Field(default_factory=current_causation_id)
+    #: Required, with **no default factory**. A factory here would fire during
+    #: parsing as well as construction, so deserialising an envelope that
+    #: omitted the field would mint a fresh id -- silently breaking the chain
+    #: it exists to preserve. Producers set it via :func:`build_envelope`.
+    correlation_id: uuid.UUID
+
+    #: Defaults to ``None``, never to the ambient causation. A default factory
+    #: here made parsing adopt *this* process's causation id, attributing an
+    #: incoming event to a local cause that did not produce it.
+    causation_id: uuid.UUID | None = None
 
     producer: str = Field(default=DEFAULT_PRODUCER, max_length=64)
     #: Which bounded context emitted it, e.g. ``identity``.

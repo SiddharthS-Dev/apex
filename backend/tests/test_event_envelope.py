@@ -309,3 +309,53 @@ def test_occurred_at_can_predate_enqueue() -> None:
     earlier = datetime.now(UTC) - timedelta(hours=1)
 
     assert _envelope(occurred_at=earlier).occurred_at == earlier
+
+
+# --- Regression: ambient context must not leak into parsing --------------
+
+
+def test_parsing_does_not_adopt_this_processes_causation() -> None:
+    """Regression. A default factory on ``causation_id`` fired during
+    ``model_validate`` as well as construction, so deserialising an event that
+    carried no causation attributed it to whatever this process was doing --
+    corrupting the very chain the field exists to preserve.
+    """
+    raw = json.loads(serialise(_envelope()))
+    raw.pop("causation_id")
+
+    foreign_cause = uuid.uuid4()
+    with correlation_scope(uuid.uuid4(), causation_id=foreign_cause):
+        parsed = deserialise(json.dumps(raw))
+
+    assert parsed.causation_id is None
+    assert parsed.causation_id != foreign_cause
+
+
+def test_parsing_does_not_mint_a_missing_correlation_id() -> None:
+    """Regression. An envelope without a correlation id is malformed; silently
+    generating one hides a broken producer and fabricates a trace."""
+    raw = json.loads(serialise(_envelope()))
+    raw.pop("correlation_id")
+
+    with pytest.raises(EventValidationError):
+        deserialise(json.dumps(raw))
+
+
+def test_construction_still_captures_ambient_context() -> None:
+    """The fix must not stop producers inheriting the request's context."""
+    correlation = uuid.uuid4()
+    cause = uuid.uuid4()
+
+    with correlation_scope(correlation, causation_id=cause):
+        envelope = _envelope()
+
+    assert envelope.correlation_id == correlation
+    assert envelope.causation_id == cause
+
+
+def test_a_carried_causation_survives_a_round_trip() -> None:
+    cause = uuid.uuid4()
+    with correlation_scope(uuid.uuid4(), causation_id=cause):
+        envelope = _envelope()
+
+    assert deserialise(serialise(envelope)).causation_id == cause

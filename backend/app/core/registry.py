@@ -23,6 +23,9 @@ alphabetical and grouped by the dependency tiers described in
 from app.audit import models as audit_models  # noqa: F401  (Commit 013)
 from app.core.models import Base, GlobalBase, TenantScopedBase
 
+# --- Integration ---------------------------------------------------------
+from app.events import models as event_models  # noqa: F401  (Commit 020)
+
 # --- Foundation ---------------------------------------------------------
 from app.identity import models as identity_models  # noqa: F401  (Commit 004)
 from app.policy import models as policy_models  # noqa: F401  (Commit 005)

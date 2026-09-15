@@ -193,7 +193,7 @@ rules for crossing between them.
 | Component | Responsibility | Introduced |
 | --- | --- | --- |
 | **Audit Writer** | Append-only event log: actor, resource, action, outcome, before/after, correlation and causation IDs, IP, user agent. No update or delete path exists, and a database trigger refuses `UPDATE`/`DELETE` even from code that bypasses the ORM. Free-form metadata is redacted on write, so a credential is never stored in the first place. See [ADR-0007](../adr/0007-append-only-audit-log.md). | ✅ Commit 013 |
-| **Event Publisher** | Writes integration events through a transactional outbox, so an event is never published for a transaction that rolled back. | Commit 020 |
+| **Event Publisher** | Writes integration events through a transactional outbox, so an event is never published for a transaction that rolled back. Retries with capped backoff, dead-letters, and supports replay. Transport-independent: no broker is named. Delivery is at-least-once and events carry **no ordering guarantee**. | ✅ Commit 020 (framework; catalogue empty per A-29) |
 | **Provenance Service** | Assembles the source → version → evidence → approval chain for any asset. | Commit 011 |
 
 ---

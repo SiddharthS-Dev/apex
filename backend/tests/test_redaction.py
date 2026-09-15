@@ -7,7 +7,7 @@ these tests protect.
 
 from __future__ import annotations
 
-from app.audit.redaction import (
+from app.core.redaction import (
     MAX_DEPTH,
     MAX_VALUE_LENGTH,
     REDACTED,
@@ -131,3 +131,23 @@ def test_sets_and_tuples_become_lists() -> None:
     result = redact({"tags": ("a", "b")})
 
     assert result["tags"] == ["a", "b"]
+
+
+def test_truncation_can_be_disabled() -> None:
+    """Integration events enforce a total size limit instead of truncating.
+
+    A consumer acting on a silently shortened value is worse than a producer
+    refusing an oversized payload.
+    """
+    long_value = "x" * (MAX_VALUE_LENGTH + 500)
+
+    result = redact({"blob": long_value}, max_value_length=None)
+
+    assert result["blob"] == long_value
+
+
+def test_disabling_truncation_still_redacts() -> None:
+    result = redact({"password": "hunter2", "note": "n"}, max_value_length=None)
+
+    assert result["password"] == REDACTED
+    assert result["note"] == "n"

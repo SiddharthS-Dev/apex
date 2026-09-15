@@ -40,8 +40,8 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from app.audit.actions import ActionSpec, ActorType, Outcome
 from app.audit.immutability import install_audit_guards
 from app.audit.models import AuditEvent
-from app.audit.redaction import redact
 from app.core.correlation import correlation_id_or_new, current_causation_id
+from app.core.redaction import redact
 from app.core.tenancy import system_scope, tenant_scope
 
 install_audit_guards()

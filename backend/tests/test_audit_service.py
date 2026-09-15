@@ -14,8 +14,8 @@ from app.audit import actions
 from app.audit import service as audit
 from app.audit.immutability import AuditEventImmutableError
 from app.audit.models import AuditEvent
-from app.audit.redaction import REDACTED
 from app.core.correlation import correlation_scope
+from app.core.redaction import REDACTED
 from app.core.tenancy import (
     PLATFORM_TENANT_ID,
     TenantContextMissingError,

@@ -57,6 +57,10 @@ status, and where the specification contradicts the assumption, follow the
 | **A-26** | Object de-duplication is by content hash, within a tenant only | 🟡 Open | — | Low. Identical bytes uploaded twice by one tenant reuse one row. De-duplication deliberately does **not** cross tenants: sharing a row would be a cross-tenant leak, and sharing storage would make one tenant's deletion affect another's object. |
 | **A-27** | A stored object's bytes may be deleted while its reference row is kept | 🟡 Open | A-11 retention | Medium. The row survives with `is_deleted` set so audit and provenance can still resolve what a past reference pointed at. Whether a tenant may delete at all, and what retention or legal hold forbids, are governance questions — this is the mechanism, not the policy. |
 | **A-28** | No virus scanning, sensitive-data screening or content sniffing on upload | 🟡 Open | Commit 019 | **High for production.** Content type is validated against an optional allowlist, but the declared type is not verified against the bytes, and nothing scans content. The development plan places malware and sensitive-data screening in Commit 019 (ingestion), which is where they belong — but until then, storage must not be treated as accepting untrusted uploads. |
+| **A-29** | **No integration event type is defined.** The seven names the plan lists are recorded as planned and unregistered | 🟡 Open | Commits 021+ | **High, and the most expensive kind of guess to get wrong.** An integration event is a contract with systems *outside* APEX; once `asset.published` is emitted with a payload, consumers we do not control depend on that shape, and changing it means coordinating across systems we cannot migrate. A wrong table is ours alone to fix; a wrong event contract is not. Framework complete, catalogue empty. |
+| **A-30** | Events are **not ordered** — not globally, not per tenant, not per aggregate | 🟡 Open | Consumer design | Medium. Nothing in the requirements specifies an ordering guarantee, so none is offered rather than one being invented. A consumer needing order must derive it from `occurred_at` and its own state. If the requirements later demand per-aggregate ordering, that is a partitioning and claiming change, not an envelope change. |
+| **A-31** | Delivery is **at-least-once**, and consumers must de-duplicate on `event_id` | 🟡 Open | Consumer design | Medium. Inherent to the outbox pattern: a worker can publish and die before recording it. Exactly-once would need a distributed transaction with the transport, which no transport here is required to support. Stated plainly rather than implied. |
+| **A-32** | No transport is chosen; the outbox is polled by a publisher that does not exist yet | 🟡 Open | Commit 021 | Low-medium. Kafka, SQS, RabbitMQ and Redis Streams are all still open. The contract is written so the transport changes in the publisher only. What *is* now fixed is that a publisher must claim, publish, then settle — and must tolerate redelivery. |
 
 ---
 
@@ -141,6 +145,8 @@ attribute *semantics*, because four of them are unspecified. The split:
 | Enforcement dependency, default-deny | Policy administration API — needs A-04 to know who may write policy |
 | Object storage: upload, read, hash, signed URLs, delete | Storage **residency** policy (A-19) — the resolver seam exists, no policy in it |
 | Storage tenant isolation and key safety | Upload/download **HTTP API** — needs A-02 (what is being uploaded) and A-04 (who may) |
+| Event envelope, outbox, retries, dead-letter, replay | The **event catalogue** (A-29) — no domain event type is registered |
+| Transactional enqueue and idempotency | The **publisher and transport** (A-32) — nothing polls the outbox yet |
 
 The test suite pins the *absence* of the undecided semantics as deliberately as
 it pins the presence of the machinery: `test_no_ordering_operator_ships_by_default`

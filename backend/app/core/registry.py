@@ -26,5 +26,6 @@ from app.core.models import Base, GlobalBase, TenantScopedBase
 # --- Foundation ---------------------------------------------------------
 from app.identity import models as identity_models  # noqa: F401  (Commit 004)
 from app.policy import models as policy_models  # noqa: F401  (Commit 005)
+from app.storage import models as storage_models  # noqa: F401  (Commit 008)
 
 __all__ = ["Base", "GlobalBase", "TenantScopedBase"]

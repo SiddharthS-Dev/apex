@@ -28,6 +28,25 @@ services:
       timeout: 5s
       retries: 10
 
+  minio:
+    # MinIO's own registry. Docker Hub refuses anonymous pulls of minio/minio.
+    image: quay.io/minio/minio:RELEASE.2025-04-22T22-12-26Z
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${APEX_S3_ACCESS_KEY:?set APEX_S3_ACCESS_KEY in .env}
+      MINIO_ROOT_PASSWORD: ${APEX_S3_SECRET_KEY:?set APEX_S3_SECRET_KEY in .env}
+    ports:
+      - "${APEX_S3_PORT:-9000}:9000"
+      - "${APEX_S3_CONSOLE_PORT:-9001}:9001"
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      test:
+        ["CMD-SHELL", "curl -fsS http://localhost:9000/minio/health/live || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
   backend:
     build:
       context: ./backend
@@ -40,6 +59,8 @@ services:
       # Assembled from the POSTGRES_* values so credentials have one source of
       # truth, and pointed at the service name rather than localhost.
       APEX_DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-apex}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@postgres:5432/${POSTGRES_DB:-apex}
+      # Service name inside the compose network, not localhost.
+      APEX_S3_ENDPOINT: http://minio:9000
     ports:
       - "${APEX_BACKEND_PORT:-8000}:8000"
     volumes:
@@ -48,6 +69,8 @@ services:
       - /srv/apex/.venv
     depends_on:
       postgres:
+        condition: service_healthy
+      minio:
         condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health')\""]
@@ -73,3 +96,4 @@ services:
 
 volumes:
   postgres-data:
+  minio-data:

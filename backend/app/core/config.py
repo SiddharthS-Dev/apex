@@ -44,6 +44,25 @@ class Settings(BaseSettings):
     db_pool_recycle: int = 1800
     db_echo: bool = False
 
+    # --- Object storage ----------------------------------------------
+    #: Empty means "use the provider's default endpoint" -- i.e. real AWS S3.
+    #: Anything else points at an S3-compatible server such as MinIO.
+    s3_endpoint: str = "http://localhost:9000"
+    s3_bucket: str = "apex-objects"
+    s3_region: str = "us-east-1"
+    s3_access_key: str = ""
+    s3_secret_key: str = ""
+    #: MinIO and most compatible servers need path-style addressing; AWS S3
+    #: itself wants virtual-host style.
+    s3_force_path_style: bool = True
+    s3_connect_timeout: int = 5
+    s3_read_timeout: int = 30
+
+    storage_max_object_bytes: int = 100 * 1024 * 1024
+    storage_signed_url_ttl_seconds: int = 300
+    #: Comma-separated allowlist. Empty means any type is accepted.
+    storage_allowed_content_types: str = ""
+
     # --- Authentication ---------------------------------------------
     # The default is a development placeholder. `_reject_default_secret`
     # below refuses to let it reach a non-development environment.
@@ -59,6 +78,15 @@ class Settings(BaseSettings):
     def cors_origin_list(self) -> list[str]:
         """CORS origins as a list, ignoring blank entries."""
         return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]
+
+    @property
+    def allowed_content_type_set(self) -> frozenset[str]:
+        """Permitted content types. Empty means no restriction."""
+        return frozenset(
+            item.strip().lower()
+            for item in self.storage_allowed_content_types.split(",")
+            if item.strip()
+        )
 
     @model_validator(mode="after")
     def _reject_default_secret(self) -> Self:

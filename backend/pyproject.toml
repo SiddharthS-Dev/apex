@@ -46,6 +46,14 @@ python_version = "3.11"
 strict = true
 warn_unused_configs = true
 
+# boto3 and botocore ship no type information. Typed stubs exist
+# (boto3-stubs), but the S3 client is held as Any behind our own ObjectStore
+# protocol, so the stubs would add a large dependency for no checking we
+# actually consume.
+[[tool.mypy.overrides]]
+module = ["boto3", "botocore.config", "botocore.exceptions"]
+ignore_missing_imports = true
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]

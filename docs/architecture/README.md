@@ -81,7 +81,7 @@ supports. Where requirements are not yet known — ontology attributes, gate
 authority mapping, tenancy isolation, the twelve trends, the ten APEX modules —
 the documents are **deliberately silent** rather than speculative.
 
-Twenty-four such gaps are tracked in [assumptions.md](assumptions.md), each with
+Twenty-eight such gaps are tracked in [assumptions.md](assumptions.md), each with
 its blast radius if the assumption proves wrong, plus a note on which parts of
 the platform are deliberately framework-only until the specification lands.
 

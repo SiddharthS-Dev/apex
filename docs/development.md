@@ -136,15 +136,43 @@ writing model and query code:
 `system_scope()` suspends filtering for genuinely cross-tenant platform work.
 It must never wrap request handling.
 
-### Local PostgreSQL port conflicts
+### Object storage
 
-If PostgreSQL is already installed on your machine, it and the container will
-both bind `5432`. Connections from the host then reach the wrong server, and
-the symptom is a confusing `password authentication failed` rather than a
-connection refusal. Set `POSTGRES_PORT` in `.env` to a free port:
+MinIO provides S3-compatible storage locally. The backend reaches it through the
+same `APEX_S3_*` settings that would point at AWS S3 in production — there is no
+development-only code path in `app/storage/`.
+
+| Setting | Local (MinIO) | AWS S3 |
+| --- | --- | --- |
+| `APEX_S3_ENDPOINT` | `http://localhost:9000` | leave empty |
+| `APEX_S3_FORCE_PATH_STYLE` | `true` | `false` |
+| `APEX_S3_ACCESS_KEY` / `_SECRET_KEY` | MinIO root credentials | IAM credentials |
+
+Two rules matter when using the storage service:
+
+- **Never pass a key.** `upload()` returns a `StoredObject` id; every later
+  operation takes that id. The key is read from the row under tenant scope.
+  This is what makes cross-tenant and arbitrary-path access inexpressible
+  rather than merely forbidden.
+- **Treat a signed URL as a credential.** It grants read access to one object
+  for a few minutes. Do not log it, and do not store it.
+
+Storage-backed tests need `APEX_TEST_S3_ENDPOINT`, `APEX_TEST_S3_ACCESS_KEY` and
+`APEX_TEST_S3_SECRET_KEY`. Without them the MinIO tests skip and the in-memory
+ones still run.
+
+### Local port conflicts
+
+Every published port is configurable, because a machine running other projects
+will already have some of them taken. The symptoms are misleading: a foreign
+PostgreSQL on `5432` produces `password authentication failed` rather than a
+connection refusal, and a foreign MinIO on `9000` answers health checks quite
+happily while storing nothing you can find.
 
 ```bash
 POSTGRES_PORT=55432
+APEX_S3_PORT=9300
+APEX_S3_CONSOLE_PORT=9301
 ```
 
 The container-to-container URL is unaffected — inside the Compose network the

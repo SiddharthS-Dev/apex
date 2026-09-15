@@ -20,6 +20,7 @@ from app.core.correlation import CorrelationIdMiddleware
 from app.core.database import dispose_engine, get_session_factory
 from app.identity.router import auth_router, identity_router
 from app.identity.service import sync_permissions
+from app.platform.regions import dispose_region_engines
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +36,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     A database that is unreachable at startup is not fatal: the readiness probe
     already reports that state, and refusing to start would turn a transient
     outage into a restart loop.
+
+    On shutdown **every** connection pool is disposed -- the default engine and
+    each regional engine. Missing either leaks connections across restarts.
     """
     factory = get_session_factory()
     try:
@@ -49,7 +53,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     yield
 
+    # Both pools, not just the default one. P02 introduced a second engine
+    # registry keyed by region; disposing only the default left every regional
+    # pool open, so connections survived shutdown and accumulated across
+    # restarts until PostgreSQL refused new ones.
     await dispose_engine()
+    await dispose_region_engines()
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:

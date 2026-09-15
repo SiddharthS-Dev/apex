@@ -181,3 +181,38 @@ def test_placement_region_is_carried_on_the_location() -> None:
     )
 
     assert resolver.resolve(TENANT, region="eu-west-1").placement_region == "eu-west-1"
+
+
+# --- Regression: shutdown must close regional pools -----------------------
+
+
+def test_app_shutdown_disposes_regional_engines() -> None:
+    """Regression. P02 added a second engine registry keyed by region, but the
+    lifespan only disposed the default engine. Every regional pool stayed open,
+    so connections survived shutdown and accumulated across restarts until
+    PostgreSQL refused new ones.
+    """
+    import pathlib
+
+    main = pathlib.Path("app/main.py").read_text(encoding="utf-8")
+
+    assert "dispose_engine()" in main
+    assert "dispose_region_engines()" in main
+
+
+async def test_dispose_region_engines_empties_the_cache() -> None:
+    settings = Settings(
+        default_region="local", database_urls="local=postgresql+psycopg://x/disposed"
+    )
+    regions.get_engine_for_region("local", settings)
+    assert regions._engines
+
+    await regions.dispose_region_engines()
+
+    assert regions._engines == {}
+
+
+async def test_disposing_an_empty_cache_is_harmless() -> None:
+    """Shutdown must not fail because nothing was ever routed."""
+    await regions.dispose_region_engines()
+    await regions.dispose_region_engines()

@@ -81,9 +81,14 @@ supports. Where requirements are not yet known — ontology attributes, gate
 authority mapping, tenancy isolation, the twelve trends, the ten APEX modules —
 the documents are **deliberately silent** rather than speculative.
 
-Twenty-two such gaps are tracked in [assumptions.md](assumptions.md), each with
+Twenty-four such gaps are tracked in [assumptions.md](assumptions.md), each with
 its blast radius if the assumption proves wrong, plus a note on which parts of
 the platform are deliberately framework-only until the specification lands.
+
+One deserves reading before the rest: **A-19**. If "geography" turns out to mean
+physical *data residency* rather than jurisdiction, it is not an attribute at
+all — it is a constraint on where rows may live, and it would supersede the
+tenancy model rather than layer on top of it.
 
 Two are resolved: the tenancy isolation model
 ([ADR-0008](../adr/0008-shared-schema-multi-tenancy.md)) and the authentication

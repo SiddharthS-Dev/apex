@@ -53,6 +53,15 @@ _system_scope: ContextVar[bool] = ContextVar("apex_system_scope", default=False)
 #: as health probes that touch no tenant-scoped entity.
 SKIP_TENANT_FILTER = "apex_skip_tenant_filter"
 
+#: Sentinel tenant for platform events that cannot be attributed to a real one.
+#:
+#: A failed login against an unknown address is worth recording, but there is no
+#: tenant to record it under -- the credential is what would have told us. Such
+#: events are written against this id, which no tenant is ever issued, so they
+#: are readable only through :func:`system_scope` and can never appear in a
+#: tenant's own audit trail.
+PLATFORM_TENANT_ID: uuid.UUID = uuid.UUID("00000000-0000-0000-0000-000000000000")
+
 
 class TenantIsolationError(RuntimeError):
     """Base class for tenant isolation failures."""

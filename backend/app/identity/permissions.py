@@ -49,6 +49,12 @@ ROLE_ASSIGN: Final = PermissionSpec(
     "Assign roles to users and remove them.",
 )
 
+# --- Audit ---------------------------------------------------------------
+AUDIT_READ: Final = PermissionSpec(
+    "audit.event.read",
+    "Read the tenant's audit records.",
+)
+
 #: Every permission the application enforces.
 ALL_PERMISSIONS: Final[tuple[PermissionSpec, ...]] = (
     USER_READ,
@@ -56,6 +62,7 @@ ALL_PERMISSIONS: Final[tuple[PermissionSpec, ...]] = (
     ROLE_READ,
     ROLE_WRITE,
     ROLE_ASSIGN,
+    AUDIT_READ,
 )
 
 #: Provisional baseline role. Exists so a tenant is administrable at all before

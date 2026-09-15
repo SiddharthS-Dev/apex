@@ -14,7 +14,9 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app import __version__
 from app.api import health
+from app.audit.router import router as audit_router
 from app.core.config import Settings, get_settings
+from app.core.correlation import CorrelationIdMiddleware
 from app.core.database import dispose_engine, get_session_factory
 from app.identity.router import auth_router, identity_router
 from app.identity.service import sync_permissions
@@ -70,10 +72,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+    # Outermost, so every request -- including one rejected by auth -- carries a
+    # correlation id that its audit records can be tied to.
+    app.add_middleware(CorrelationIdMiddleware)
 
     app.include_router(health.router)
     app.include_router(auth_router, prefix=settings.api_prefix)
     app.include_router(identity_router, prefix=settings.api_prefix)
+    app.include_router(audit_router, prefix=settings.api_prefix)
 
     return app
 

@@ -51,6 +51,8 @@ status, and where the specification contradicts the assumption, follow the
 | **A-20** | Organization structure — flat, hierarchical, or many per tenant | 🟡 **Open, deliberately undecided** | A later commit | Medium. A hierarchy implies inheritance of access down the tree, which is an evaluation rule, not just a data shape. Treated as a pluggable attribute only. |
 | **A-21** | Policy combining is deny-overrides, with no other algorithm implemented | 🟡 Open | Commit 012 | Medium. Deny-overrides is a *safety* default, not a business precedence rule. Permit-overrides, first-applicable and explicit priority ordering are **not** implemented, because choosing between them is an authority decision (A-04). The combiner is registrable, so one arrives without touching `evaluate()`. |
 | **A-22** | Policy conditions are a flat AND; there is no OR, no nesting, no rule language | 🟡 Open | A later commit | Low-medium. A disjunction is expressed as a second policy. This keeps evaluation total and obviously terminating, and avoids inventing a rule language before the requirements ask for one. Adding nesting later is a schema change plus an evaluator change — contained, but not free. |
+| **A-23** | Audit immutability is enforced by a database trigger rather than by role grants | 🟡 Open | Production hardening | Low. ADR-0007 anticipated granting the application role `INSERT`/`SELECT` only. That cannot be done in development, where the app connects as the table owner and an owner can always re-grant. The trigger holds regardless of role, so it is the stronger guarantee; the grant is still worth adding in production as defence in depth. |
+| **A-24** | Business event taxonomy for audit is **not** defined | 🟡 Open | Commit 012 | Medium. Every catalogued action is `TECHNICAL` — it names a mechanical event in code that already exists. Gate transitions, approvals, publication and retention events need A-04 to name correctly, and an immutable record is the worst place to put unapproved vocabulary. The writer accepts uncatalogued actions, so no future context is blocked. |
 
 ---
 
@@ -81,6 +83,41 @@ Where the specification is silent, the artefacts are silent. This is why
 [components.md](components.md) omits the AI decomposition and
 [domain-boundaries.md](domain-boundaries.md) lists ontology entities without
 asserting a schema.
+
+---
+
+## ⚠️ A-19: geography may be a tenancy question, not an attribute question
+
+Flagged separately because it is the one open assumption that could invalidate
+a decision already made.
+
+Commit 005 treats geography as a pluggable attribute, which is correct **if** it
+means jurisdiction — "this content is governed by EU rules" is a fact to filter
+on, and the PDP handles it.
+
+If it means **data residency** — "this content must be stored inside the EU" —
+it is not an attribute at all. It is a constraint on *where rows physically
+live*, and shared-schema logical multi-tenancy
+([ADR-0008](../adr/0008-shared-schema-multi-tenancy.md)) cannot satisfy it:
+every tenant's rows share one table in one database in one region.
+
+**The tenancy model is not being redesigned now**, and should not be on
+speculation. But the impact if residency is what is meant:
+
+| Affected | Impact |
+| --- | --- |
+| ADR-0008 | Would need superseding, not amending — the isolation model itself changes |
+| Every migration | Schema-per-region or database-per-region changes all of them |
+| Connection strategy | Routing by region, not one pool |
+| `app/core/tenancy.py` | The scope predicate becomes connection selection as well as filtering |
+| Object storage | Bucket placement becomes a correctness requirement, not a deployment detail |
+| A-05 deployment model | Multi-region becomes mandatory rather than optional |
+
+**Cost of resolving it early versus late:** cheap now — the answer changes a
+plan. Expensive after Commits 007–011, when assets, versions, evidence and
+provenance all exist and would each need migrating across a new isolation
+boundary. This is worth one sentence in the requirements long before it is
+worth any code.
 
 ---
 

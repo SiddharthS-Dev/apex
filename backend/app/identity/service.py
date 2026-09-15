@@ -50,10 +50,27 @@ class IdentityError(Exception):
 class InvalidCredentialsError(IdentityError):
     """Authentication failed.
 
-    Deliberately undifferentiated: no such user, wrong password, and a user
-    with no local credential all raise this, so the response cannot be used to
+    Deliberately undifferentiated *to the client*: no such user, wrong
+    password, and a user with no local credential all raise this, and the API
+    returns one message for all three, so the response cannot be used to
     enumerate accounts.
+
+    ``tenant_id`` and ``user_id`` are populated when the principal *was*
+    resolved and only the credential failed. They exist so the failure can be
+    audited into the right tenant's trail, and are never surfaced in a
+    response -- the HTTP layer uses them for attribution only.
     """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        tenant_id: uuid.UUID | None = None,
+        user_id: uuid.UUID | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.tenant_id = tenant_id
+        self.user_id = user_id
 
 
 class InactiveUserError(IdentityError):
@@ -290,10 +307,14 @@ async def authenticate(session: AsyncSession, *, email: str, password: str) -> U
 
     if user.password_hash is None:
         equalise_timing()
-        raise InvalidCredentialsError("Invalid email or password")
+        raise InvalidCredentialsError(
+            "Invalid email or password", tenant_id=user.tenant_id, user_id=user.id
+        )
 
     if not verify_password(password, user.password_hash):
-        raise InvalidCredentialsError("Invalid email or password")
+        raise InvalidCredentialsError(
+            "Invalid email or password", tenant_id=user.tenant_id, user_id=user.id
+        )
 
     if not user.is_active:
         raise InactiveUserError("This account is deactivated")

@@ -28,7 +28,12 @@ import pytest_asyncio
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import String, text
-from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, create_async_engine
+from sqlalchemy.ext.asyncio import (
+    AsyncEngine,
+    AsyncSession,
+    async_sessionmaker,
+    create_async_engine,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.pool import NullPool
 
@@ -48,6 +53,27 @@ TEST_DATABASE_URL = os.environ.get(
     "APEX_TEST_DATABASE_URL",
     "postgresql+psycopg://apex:apex@localhost:5432/apex_test",
 )
+
+#: Mirrors the trigger created by the audit migration. Kept here rather than
+#: imported from the migration because a migration is a historical record and
+#: must not become a runtime dependency; if the two drift,
+#: ``test_trigger_matches_the_migration`` fails.
+AUDIT_IMMUTABILITY_TRIGGER_SQL = """
+CREATE OR REPLACE FUNCTION apex_audit_event_immutable()
+RETURNS trigger AS $$
+BEGIN
+    RAISE EXCEPTION
+        'audit_event is append-only; % is not permitted', TG_OP
+        USING ERRCODE = 'restrict_violation';
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS audit_event_immutable ON audit_event;
+
+CREATE TRIGGER audit_event_immutable
+BEFORE UPDATE OR DELETE ON audit_event
+FOR EACH ROW EXECUTE FUNCTION apex_audit_event_immutable();
+"""
 
 
 class TenantWidget(TenantScopedBase):
@@ -80,6 +106,11 @@ async def engine() -> AsyncIterator[AsyncEngine]:
     async with candidate.begin() as connection:
         await connection.run_sync(Base.metadata.drop_all)
         await connection.run_sync(Base.metadata.create_all)
+        # create_all builds tables from metadata, which knows nothing about
+        # triggers. Install the audit append-only trigger the migration
+        # creates, so tests exercise the real database-level guarantee rather
+        # than only the application guard in front of it.
+        await connection.execute(text(AUDIT_IMMUTABILITY_TRIGGER_SQL))
 
     yield candidate
 
@@ -96,17 +127,24 @@ async def session(engine: AsyncEngine) -> AsyncIterator[AsyncSession]:
 
 
 @pytest_asyncio.fixture
-async def app(session: AsyncSession) -> AsyncIterator[FastAPI]:
+async def app(session: AsyncSession, engine: AsyncEngine) -> AsyncIterator[FastAPI]:
     """The application, with its database dependency bound to the test session."""
+    from app.core.database import get_session_factory
     from app.identity.dependencies import db_session as db_session_dependency
     from app.main import create_app
 
     application = create_app()
 
-    async def _override() -> AsyncIterator[AsyncSession]:
+    async def _override_session() -> AsyncIterator[AsyncSession]:
         yield session
 
-    application.dependency_overrides[db_session_dependency] = _override
+    def _override_factory() -> async_sessionmaker[AsyncSession]:
+        # Audit writes that must outlive a failing request open their own
+        # session, so they need the test engine rather than the configured one.
+        return async_sessionmaker(engine, expire_on_commit=False)
+
+    application.dependency_overrides[db_session_dependency] = _override_session
+    application.dependency_overrides[get_session_factory] = _override_factory
     yield application
     application.dependency_overrides.clear()
 

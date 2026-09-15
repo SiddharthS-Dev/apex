@@ -17,6 +17,7 @@ live in code comments instead.
 | [0005](0005-evidence-gated-publication.md) | Evidence-gated publication | Accepted |
 | [0006](0006-integration-by-reference-and-event.md) | Integration by reference and event | Accepted |
 | [0007](0007-append-only-audit-log.md) | Append-only audit log | Accepted |
+| [0008](0008-shared-schema-multi-tenancy.md) | Shared-schema multi-tenancy with enforced isolation | Accepted |
 
 ---
 
@@ -28,7 +29,7 @@ left to convention.
 
 | Guarantee | Rests on |
 | --- | --- |
-| A user cannot reach content they are not entitled to, by **any** path | 0004 (retrieval-time filtering), 0003 (one process, one policy decision point) |
+| A user cannot reach content they are not entitled to, by **any** path | 0004 (retrieval-time filtering), 0008 (tenant filter and default-deny), 0003 (one process, one policy decision point) |
 | A published claim is always backed by valid evidence | 0005 (gate precondition), 0003 (transition and audit commit together) |
 | The authoritative source of any value is answerable | 0006 (no duplication), 0005 (recorded authority per claim) |
 | What happened can be reconstructed and trusted | 0007 (immutability), 0003 (audit in the same transaction) |

@@ -37,6 +37,9 @@ services:
     environment:
       APEX_BACKEND_HOST: 0.0.0.0
       APEX_BACKEND_PORT: 8000
+      # Assembled from the POSTGRES_* values so credentials have one source of
+      # truth, and pointed at the service name rather than localhost.
+      APEX_DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-apex}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@postgres:5432/${POSTGRES_DB:-apex}
     ports:
       - "${APEX_BACKEND_PORT:-8000}:8000"
     volumes:

@@ -28,6 +28,16 @@ class Settings(BaseSettings):
     backend_host: str = "0.0.0.0"  # noqa: S104 -- bound inside a container
     backend_port: int = 8000
 
+    # --- Database ---------------------------------------------------
+    # psycopg 3 serves both the sync and async engines, so one URL covers
+    # the application and Alembic.
+    database_url: str = "postgresql+psycopg://apex:apex@localhost:5432/apex"
+    db_pool_size: int = 5
+    db_max_overflow: int = 10
+    db_pool_timeout: int = 30
+    db_pool_recycle: int = 1800
+    db_echo: bool = False
+
     # Comma-separated so the value stays readable in .env and compose files.
     cors_origins: str = "http://localhost:5173"
 

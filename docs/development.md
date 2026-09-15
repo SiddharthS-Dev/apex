@@ -84,6 +84,74 @@ Run from `backend/`. On macOS/Linux substitute `.venv/bin/python`.
 
 ---
 
+## Database and migrations
+
+The database URL is **not** stored in `alembic.ini`. Both the application and
+Alembic read `APEX_DATABASE_URL`, so they cannot target different databases and
+no credentials are committed.
+
+```bash
+cd backend
+export APEX_DATABASE_URL="postgresql+psycopg://apex:<password>@localhost:5432/apex"
+```
+
+| Command | Purpose |
+| --- | --- |
+| `alembic current` | Show the applied revision |
+| `alembic history` | Show the revision chain |
+| `alembic upgrade head` | Apply all pending migrations |
+| `alembic downgrade -1` | Roll back one revision |
+| `alembic revision --autogenerate -m "add x"` | Generate a migration from model changes |
+
+Prefix each with `.venv/Scripts/python.exe -m`.
+
+### Writing a migration
+
+1. Add or change models in the owning context.
+2. **Import them in `app/core/registry.py`.** Autogenerate compares
+   `Base.metadata` against the live database, and metadata only knows about
+   models something has imported. A model nothing imports produces an empty
+   migration and a table that is never created.
+3. Autogenerate, then **read the generated file**. Autogenerate is a first
+   draft: it misses data migrations, gets some type changes wrong, and will
+   happily drop a column you meant to rename.
+4. Verify the round trip — `upgrade head`, then `downgrade -1`, then
+   `upgrade head` again. A migration that cannot be rolled back is a migration
+   that cannot be deployed safely.
+
+### Tenancy
+
+APEX uses shared-schema multi-tenancy
+([ADR-0008](adr/0008-shared-schema-multi-tenancy.md)). Two rules matter when
+writing model and query code:
+
+- **Inherit from `TenantScopedBase`** for tenant-owned tables, or `GlobalBase`
+  for platform-level ones. Inheriting the tenant mixin is what opts a model
+  into isolation.
+- **Do not write `WHERE tenant_id = ...` by hand.** Wrap the operation in
+  `tenant_scope(tenant_id)`; the session guards apply the filter to every ORM
+  read and stamp every write. An unscoped read of tenant-owned data raises
+  rather than returning everything.
+
+`system_scope()` suspends filtering for genuinely cross-tenant platform work.
+It must never wrap request handling.
+
+### Local PostgreSQL port conflicts
+
+If PostgreSQL is already installed on your machine, it and the container will
+both bind `5432`. Connections from the host then reach the wrong server, and
+the symptom is a confusing `password authentication failed` rather than a
+connection refusal. Set `POSTGRES_PORT` in `.env` to a free port:
+
+```bash
+POSTGRES_PORT=55432
+```
+
+The container-to-container URL is unaffected — inside the Compose network the
+backend always reaches `postgres:5432`.
+
+---
+
 ## Frontend commands
 
 Run from `frontend/`.
@@ -138,8 +206,12 @@ cd ..
 # 4. Infrastructure
 docker compose config --quiet
 
-# 5. Database migrations (from Commit 003 onward)
-# cd backend && .venv/Scripts/python.exe -m alembic upgrade head
+# 5. Database migrations -- verify the round trip, not just the upgrade
+cd backend
+.venv/Scripts/python.exe -m alembic upgrade head
+.venv/Scripts/python.exe -m alembic downgrade base
+.venv/Scripts/python.exe -m alembic upgrade head
+cd ..
 
 # 6. Confirm no secrets are staged
 git diff --cached --name-only

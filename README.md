@@ -137,7 +137,14 @@ cd frontend && npm run typecheck && npm run lint && npm test && npm run build
 
 # Infrastructure
 docker compose config --quiet
+
+# Database migrations
+cd backend && .venv/Scripts/python.exe -m alembic upgrade head
 ```
+
+Database-backed tests need a reachable PostgreSQL. Point
+`APEX_TEST_DATABASE_URL` at a disposable database; without one those tests skip
+rather than fail, so the suite stays runnable without Docker.
 
 ---
 

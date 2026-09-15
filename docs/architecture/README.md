@@ -81,7 +81,10 @@ supports. Where requirements are not yet known — ontology attributes, gate
 authority mapping, tenancy isolation, the twelve trends, the ten APEX modules —
 the documents are **deliberately silent** rather than speculative.
 
-Fourteen such gaps are tracked in [assumptions.md](assumptions.md), each with
-its blast radius if the assumption proves wrong. Four of them are needed by
+Fifteen such gaps are tracked in [assumptions.md](assumptions.md), each with
+its blast radius if the assumption proves wrong. Three of them are needed by
 Commits 005–007, which is the point at which building further without the full
 specification stops being safe.
+
+One has already been resolved: the tenancy isolation model (A-07) was confirmed
+and is now [ADR-0008](../adr/0008-shared-schema-multi-tenancy.md).

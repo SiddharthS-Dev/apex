@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
@@ -158,6 +159,7 @@ async def resolve_region_for_tenant(
     return residency.require(kind)
 
 
+@asynccontextmanager
 async def session_for_tenant(
     control_session: AsyncSession,
     tenant_id: uuid.UUID,
@@ -166,6 +168,15 @@ async def session_for_tenant(
 
     ``control_session`` reads the registry; the yielded session is where the
     tenant's own rows live. At P02 they are the same database.
+
+    Usage::
+
+        async with session_for_tenant(control, tenant_id) as regional:
+            ...
+
+    Decorated, because without ``@asynccontextmanager`` this is a bare async
+    generator and ``async with`` on it raises ``AttributeError: __aenter__``.
+    Nothing called it, so nothing caught that.
     """
     region = await resolve_region_for_tenant(control_session, tenant_id, "relational")
     factory = get_session_factory_for_region(region)

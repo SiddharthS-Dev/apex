@@ -381,3 +381,58 @@ async def test_regions_are_global_not_tenant_scoped(session: AsyncSession) -> No
         codes = {r.code for r in (await session.execute(select(Region))).scalars().all()}
 
     assert "eu-west-1" in codes
+
+
+# --- Regression: session_for_tenant must be usable ------------------------
+
+
+async def test_session_for_tenant_is_an_async_context_manager(
+    session: AsyncSession,
+    engine,  # noqa: ANN001
+    tenant_a: uuid.UUID,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression. It was a bare async generator, so the ``async with`` its own
+    docstring showed raised AttributeError. Nothing called it, so nothing
+    noticed."""
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+
+    from app.platform import regions
+
+    monkeypatch.setattr(
+        regions,
+        "get_session_factory_for_region",
+        lambda region=None, settings=None: async_sessionmaker(
+            engine, expire_on_commit=False
+        ),
+    )
+
+    async with regions.session_for_tenant(session, tenant_a) as regional:
+        assert (await regional.execute(text("SELECT 1"))).scalar_one() == 1
+
+
+async def test_session_for_tenant_refuses_a_strict_tenant_without_a_region(
+    session: AsyncSession,
+    tenant_a: uuid.UUID,
+) -> None:
+    """Routing must fail closed for the same reason storage does."""
+    from app.platform import regions
+    from app.platform.residency import (
+        RegionUnavailableError,
+        TenantResidency,
+        set_residency_resolver,
+    )
+
+    class StrictUnassigned:
+        async def resolve(self, session, tenant_id):  # type: ignore[no-untyped-def]
+            return TenantResidency(
+                mode=ResidencyMode.STRICT, default_region="local", relational=None
+            )
+
+    set_residency_resolver(StrictUnassigned())
+    try:
+        with pytest.raises(RegionUnavailableError, match="relational"):
+            async with regions.session_for_tenant(session, tenant_a):
+                pass
+    finally:
+        set_residency_resolver(None)

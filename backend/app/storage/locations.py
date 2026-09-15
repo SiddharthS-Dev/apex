@@ -2,29 +2,22 @@
 
 **This module is the seam for A-19 (data residency).**
 
-Today every tenant shares one bucket, which is correct while residency is
-unspecified. But *where bytes live* is exactly the question residency asks, and
-if the requirements turn out to mean physical residency rather than
-jurisdiction, the answer has to be expressible somewhere. Putting bucket
-selection behind a resolver now means that "somewhere" already exists.
+Master Prompt §10 resolved A-19: geography means **both** jurisdiction and
+physical residency, modelled separately. This module handles the storage half of
+residency -- which bucket, in which region, holds a tenant's bytes.
 
-Resolution is deliberately **per tenant**, not global, even though the default
-implementation ignores the tenant. A global `settings.s3_bucket` read scattered
-through the service layer would have to be hunted down and replaced; a resolver
-is swapped once.
+:class:`RegionAwareBucketResolver` maps a **region code** to a bucket via
+configuration (``APEX_S3_BUCKETS`` as ``region=bucket``). The caller supplies the
+region, having resolved it from the tenant's residency, so this stays a pure
+mapping with no database access.
 
-What a future residency policy would replace:
+With a single configured bucket the behaviour is identical to the arrangement it
+replaces -- which is the point: P02 delivers residency *architecture*, not a
+multi-region deployment.
 
-- :class:`SingleBucketResolver` -> a resolver mapping tenant to bucket/region
-- nothing else in this package
-
-What it would **not** fix, and must not be mistaken for a solution: the
-relational data still lives in one shared PostgreSQL schema
-(:doc:`ADR-0008 <../../../docs/adr/0008-shared-schema-multi-tenancy>`). If
-residency is required, object storage is the easy half. See the A-19 entry in
-``docs/architecture/assumptions.md`` for the full blast radius.
-
-**No residency policy is implemented here, and none is assumed.**
+What this does **not** solve, and must not be mistaken for a solution:
+relational data placement. Object storage is the easy half. See ADR-0010 and the
+A-19 entry in ``docs/architecture/assumptions.md``.
 """
 
 from __future__ import annotations
@@ -42,8 +35,13 @@ class StorageLocation:
     """A bucket, a region, and an optional key prefix within it."""
 
     bucket: str
+    #: The S3 *signing* region, which is a protocol detail.
     region: str
     prefix: str = ""
+    #: The APEX residency region this placement satisfies. Recorded on each
+    #: stored object so where bytes live is a fact, not an inference from
+    #: whatever configuration happens to be current.
+    placement_region: str | None = None
 
     def __post_init__(self) -> None:
         if not self.bucket:
@@ -54,28 +52,77 @@ class StorageLocation:
 class LocationResolver(Protocol):
     """Decides which location a tenant's objects belong in."""
 
-    def resolve(self, tenant_id: uuid.UUID) -> StorageLocation:
-        """Return the location for this tenant's objects."""
+    def resolve(
+        self, tenant_id: uuid.UUID, region: str | None = None
+    ) -> StorageLocation:
+        """Return the location for this tenant's objects in a region."""
         ...
 
 
-class SingleBucketResolver:
-    """Every tenant shares one bucket, separated by key prefix.
+def parse_bucket_map(raw: str) -> dict[str, str]:
+    """Parse ``region=bucket,region=bucket`` into a mapping.
 
-    The correct default while residency is unspecified, and the thing a
-    residency policy would replace. Tenant separation is by key prefix and --
-    more importantly -- by the tenant-scoped database rows that are the only
-    way a key is ever obtained.
+    A malformed entry raises rather than being skipped: a silently dropped
+    region would place a tenant's bytes somewhere other than intended.
+    """
+    mapping: dict[str, str] = {}
+    for entry in raw.split(","):
+        item = entry.strip()
+        if not item:
+            continue
+        region, separator, bucket = item.partition("=")
+        if not separator or not region.strip() or not bucket.strip():
+            raise ValueError(
+                f"Malformed bucket mapping entry {item!r}; expected 'region=bucket'"
+            )
+        mapping[region.strip()] = bucket.strip()
+    return mapping
+
+
+class RegionAwareBucketResolver:
+    """Maps a region code to the bucket holding that region's objects.
+
+    A pure mapping: the caller resolves the tenant's residency and passes the
+    region in, so nothing here touches the database. With one configured bucket
+    this behaves exactly as the previous single-bucket resolver did.
+
+    Tenant separation remains by key prefix and -- far more importantly -- by
+    the tenant-scoped database rows that are the only way a key is ever
+    obtained. Bucket separation is about *placement*, not isolation.
     """
 
     def __init__(self, settings: Settings | None = None) -> None:
         self._settings = settings or get_settings()
 
-    def resolve(self, tenant_id: uuid.UUID) -> StorageLocation:
+    def buckets(self) -> dict[str, str]:
+        """Region to bucket. Falls back to the single-bucket configuration."""
+        configured = parse_bucket_map(self._settings.s3_buckets)
+        if configured:
+            return configured
+        return {self._settings.default_region: self._settings.s3_bucket}
+
+    def resolve(
+        self, tenant_id: uuid.UUID, region: str | None = None
+    ) -> StorageLocation:
+        target = region or self._settings.default_region
+        buckets = self.buckets()
+
+        bucket = buckets.get(target)
+        if bucket is None:
+            raise StorageConfigurationError(
+                f"No bucket configured for region {target!r}; "
+                f"configured regions are {sorted(buckets)}"
+            )
+
         return StorageLocation(
-            bucket=self._settings.s3_bucket,
+            bucket=bucket,
             region=self._settings.s3_region,
+            placement_region=target,
         )
+
+
+#: Retained name for the previous resolver. Identical behaviour with one bucket.
+SingleBucketResolver = RegionAwareBucketResolver
 
 
 _resolver: LocationResolver | None = None
@@ -85,7 +132,7 @@ def get_location_resolver() -> LocationResolver:
     """The process-wide resolver."""
     global _resolver
     if _resolver is None:
-        _resolver = SingleBucketResolver()
+        _resolver = RegionAwareBucketResolver()
     return _resolver
 
 

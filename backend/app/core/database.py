@@ -36,8 +36,29 @@ _engine: AsyncEngine | None = None
 _session_factory: async_sessionmaker[AsyncSession] | None = None
 
 
+def create_engine_for_url(url: str, settings: Settings | None = None) -> AsyncEngine:
+    """Build an async engine for an explicit URL.
+
+    Separated from :func:`create_engine` so the region registry in
+    :mod:`app.platform.regions` can build one engine per region without
+    duplicating pool configuration.
+    """
+    settings = settings or get_settings()
+    return create_async_engine(
+        url,
+        echo=settings.db_echo,
+        pool_size=settings.db_pool_size,
+        max_overflow=settings.db_max_overflow,
+        pool_timeout=settings.db_pool_timeout,
+        pool_recycle=settings.db_pool_recycle,
+        # Verify a connection before handing it out; Postgres restarts and
+        # idle-connection reapers would otherwise surface as request errors.
+        pool_pre_ping=True,
+    )
+
+
 def create_engine(settings: Settings | None = None) -> AsyncEngine:
-    """Build a new async engine from settings."""
+    """Build a new async engine for the default database."""
     settings = settings or get_settings()
     return create_async_engine(
         settings.database_url,

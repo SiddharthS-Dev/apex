@@ -6,10 +6,15 @@ Resolvers turn an :class:`~app.policy.context.AccessRequest` into facts. Each
 owns a namespace and may only write keys under it, so two resolvers can never
 silently contest the same attribute.
 
-Only two resolvers ship here, and both are *structural* -- they describe the
-request itself, not the business. The attributes that A-13, A-14, geography and
-organisation will need are added by registering further resolvers; no change to
-this module, the engine, or the schema is required.
+Three resolvers ship here. ``request`` and ``subject`` are *structural* -- they
+describe the request itself. ``geography`` exposes the tenant's **jurisdiction**,
+which Master Prompt §10 defines explicitly, and only that: physical residency is
+a deployment concern handled by :mod:`app.platform.residency`, not an
+authorization attribute.
+
+The attributes A-13 (classification), A-14 (audience) and A-20 (organisation)
+will need are added by registering further resolvers; no change to this module,
+the engine, or the schema is required.
 """
 
 from __future__ import annotations
@@ -84,6 +89,45 @@ class SubjectAttributeResolver:
         return values
 
 
+class GeographyAttributeResolver:
+    """Exposes the tenant's jurisdiction.
+
+    **Jurisdiction only, and no hierarchy walking.** ``Jurisdiction.parent_id``
+    exists but is not traversed: whether an EU-jurisdiction rule applies to a
+    DE-jurisdiction subject is not specified, and inventing that answer would
+    put an unapproved legal interpretation into the authorization path
+    (assumption **A-33**).
+
+    A tenant absent from the registry, or with no jurisdiction assigned,
+    resolves to *nothing at all* rather than to a default. An unresolved
+    attribute never satisfies a condition, so the failure direction is closed.
+    """
+
+    namespace = "geography"
+
+    async def resolve(
+        self,
+        request: AccessRequest,
+        session: AsyncSession,
+    ) -> Mapping[str, AttributeValue]:
+        from sqlalchemy import select
+
+        from app.core.tenancy import system_scope
+        from app.platform.models import Tenant
+
+        # The registry defines tenants, so it cannot be filtered by one.
+        with system_scope():
+            tenant = (
+                await session.execute(
+                    select(Tenant).where(Tenant.id == request.tenant_id)
+                )
+            ).scalar_one_or_none()
+
+        if tenant is None or tenant.jurisdiction is None:
+            return {}
+        return {"jurisdiction": tenant.jurisdiction.code}
+
+
 class DuplicateNamespaceError(ValueError):
     """Two resolvers claimed the same namespace."""
 
@@ -138,8 +182,18 @@ class AttributeRegistry:
 
 
 def default_registry() -> AttributeRegistry:
-    """The structural resolvers, with no business attributes."""
-    return AttributeRegistry([RequestAttributeResolver(), SubjectAttributeResolver()])
+    """The resolvers every decision starts from.
+
+    Structural attributes plus jurisdiction. Classification, audience and
+    organisation are still absent -- their semantics arrive at P05 and P04.
+    """
+    return AttributeRegistry(
+        [
+            RequestAttributeResolver(),
+            SubjectAttributeResolver(),
+            GeographyAttributeResolver(),
+        ]
+    )
 
 
 def access_request(

@@ -110,9 +110,27 @@ async def test_subject_resolver_describes_the_caller() -> None:
     assert bag.get("subject.tenant_id") == str(TENANT)
 
 
-async def test_default_registry_carries_only_structural_namespaces() -> None:
-    """No business attribute ships by default -- that is the A-13/A-14 boundary."""
-    assert default_registry().namespaces == frozenset({"request", "subject"})
+async def test_default_registry_carries_structure_and_jurisdiction() -> None:
+    """Jurisdiction is specified (Master Prompt §10) so it ships; the still
+    unspecified domains do not.
+
+    This assertion previously pinned the *absence* of geography. P02 resolved
+    A-19, so geography joins -- while classification (A-13), audience (A-14)
+    and organisation (A-20) remain deliberately absent.
+    """
+    assert default_registry().namespaces == frozenset(
+        {"request", "subject", "geography"}
+    )
+
+
+async def test_default_registry_still_omits_the_unspecified_domains() -> None:
+    """A-13, A-14 and A-20 are not yet defined; guessing them would be a
+    fabrication under Master Prompt §35."""
+    namespaces = default_registry().namespaces
+
+    assert "classification" not in namespaces
+    assert "audience" not in namespaces
+    assert "organisation" not in namespaces
 
 
 async def test_resource_id_is_omitted_when_absent() -> None:
@@ -127,7 +145,11 @@ async def test_resource_id_is_omitted_when_absent() -> None:
 
 
 async def test_a_resolver_can_be_registered_and_contributes_attributes() -> None:
-    registry = default_registry()
+    """Built from the structural resolvers rather than ``default_registry()``:
+    geography reads the tenant registry, and this test has no database."""
+    registry = AttributeRegistry(
+        [RequestAttributeResolver(), SubjectAttributeResolver()]
+    )
     registry.register(DepartmentResolver())
 
     bag = await registry.resolve(_request(), session=None)  # type: ignore[arg-type]

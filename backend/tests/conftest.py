@@ -54,6 +54,25 @@ TEST_DATABASE_URL = os.environ.get(
     "postgresql+psycopg://apex:apex@localhost:5432/apex_test",
 )
 
+#: Regions and tenants the fixtures rely on. `00000000-…` is the platform
+#: sentinel that owns unattributable audit events; it is seeded inactive so it
+#: can never be authenticated into.
+SEED_PLATFORM_SQL = """
+INSERT INTO region (id, code, name, is_active, created_at, updated_at)
+VALUES ('cccccccc-0000-4000-8000-00000000000c', 'local', 'Local', true, now(), now())
+ON CONFLICT DO NOTHING;
+
+INSERT INTO tenant (id, slug, name, is_active, residency_mode, created_at, updated_at)
+VALUES
+  ('00000000-0000-0000-0000-000000000000', '__platform__',
+   'Platform (unattributable events)', false, 'unrestricted', now(), now()),
+  ('aaaaaaaa-0000-4000-8000-000000000001', 'tenant-a', 'Tenant A',
+   true, 'unrestricted', now(), now()),
+  ('bbbbbbbb-0000-4000-8000-000000000002', 'tenant-b', 'Tenant B',
+   true, 'unrestricted', now(), now())
+ON CONFLICT DO NOTHING;
+"""
+
 #: Mirrors the trigger created by the audit migration. Kept here rather than
 #: imported from the migration because a migration is a historical record and
 #: must not become a runtime dependency; if the two drift,
@@ -111,6 +130,11 @@ async def engine() -> AsyncIterator[AsyncEngine]:
         # creates, so tests exercise the real database-level guarantee rather
         # than only the application guard in front of it.
         await connection.execute(text(AUDIT_IMMUTABILITY_TRIGGER_SQL))
+        # Tenant-owned tables now carry a foreign key to `tenant` (P02), so the
+        # fixtures' tenants must exist before any test inserts against them.
+        # Seeding here rather than per-test keeps every existing test working
+        # unchanged while the constraint is genuinely enforced.
+        await connection.execute(text(SEED_PLATFORM_SQL))
 
     yield candidate
 

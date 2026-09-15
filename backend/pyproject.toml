@@ -17,6 +17,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
+    "import-linter>=2.0",
     "pytest>=8.3",
     "pytest-asyncio>=0.24",
     "httpx>=0.27",
@@ -59,3 +60,83 @@ testpaths = ["tests"]
 pythonpath = ["."]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
+
+
+# ---------------------------------------------------------------
+# Bounded-context boundaries, enforced rather than reviewed.
+#
+# Master Prompt §23: each context owns its data and interacts with others
+# through services, APIs and events -- never by reaching in. Documentation
+# alone does not survive contact with a deadline; a CI contract does.
+#
+# The contracts target each context's *domain* modules -- models, services,
+# and the rules -- not its router. A router is an edge adapter: an audit
+# endpoint must know which permission to require, so it legitimately composes
+# Audit with Identity. The dependency rule is about who owns data and who makes
+# decisions, not about which module wires an HTTP route. Stating it as "the
+# whole package" would be stating it wrongly, and a contract that is wrong gets
+# relaxed the first time it fires.
+# ---------------------------------------------------------------
+[tool.importlinter]
+root_package = "app"
+
+[[tool.importlinter.contracts]]
+name = "Platform is the control plane and depends on no bounded context"
+type = "forbidden"
+source_modules = ["app.platform"]
+forbidden_modules = [
+    "app.identity",
+    "app.policy",
+    "app.audit",
+    "app.storage",
+    "app.events",
+]
+
+[[tool.importlinter.contracts]]
+name = "The Audit domain is written to by every context and depends on none"
+type = "forbidden"
+source_modules = [
+    "app.audit.models",
+    "app.audit.service",
+    "app.audit.actions",
+    "app.audit.immutability",
+]
+forbidden_modules = [
+    "app.identity",
+    "app.policy",
+    "app.storage",
+    "app.events",
+]
+
+[[tool.importlinter.contracts]]
+name = "The Events domain depends on no other bounded context"
+type = "forbidden"
+source_modules = [
+    "app.events.envelope",
+    "app.events.models",
+    "app.events.outbox",
+    "app.events.registry",
+]
+forbidden_modules = [
+    "app.audit",
+    "app.identity",
+    "app.policy",
+    "app.storage",
+]
+
+[[tool.importlinter.contracts]]
+name = "The Storage domain does not reach into Identity, Policy, Audit or Events"
+type = "forbidden"
+source_modules = [
+    "app.storage.models",
+    "app.storage.service",
+    "app.storage.backend",
+    "app.storage.keys",
+    "app.storage.locations",
+]
+forbidden_modules = [
+    "app.audit",
+    "app.identity",
+    "app.policy",
+    "app.events",
+]

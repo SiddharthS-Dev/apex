@@ -1,4 +1,7 @@
-"""Tenant registry and policy decision point, against PostgreSQL 16.
+"""Policy definition and the policy decision point, against PostgreSQL 16.
+
+Tenant registry tests moved to ``test_platform_service.py`` in P02, following
+the ``Tenant`` relocation.
 
 The isolation tests here are the ones that matter: a policy belonging to one
 tenant must never influence another tenant's decision, and it must not be
@@ -17,13 +20,9 @@ from app.core.tenancy import TenantContextMissingError, system_scope, tenant_sco
 from app.policy import service
 from app.policy.attributes import access_request, default_registry
 from app.policy.engine import Effect, Outcome
-from app.policy.models import Policy, PolicyCondition, Tenant
+from app.policy.models import Policy, PolicyCondition
 from app.policy.operators import Operator
-from app.policy.service import (
-    DuplicateTenantError,
-    InvalidPolicyError,
-    TenantNotFoundError,
-)
+from app.policy.service import InvalidPolicyError
 from tests.test_policy_attributes import DepartmentResolver
 
 SUBJECT = uuid.UUID("11111111-0000-4000-8000-000000000001")
@@ -36,76 +35,6 @@ def _request(tenant_id: uuid.UUID, action: str = "read", resource_type: str = "a
         action=action,
         resource_type=resource_type,
     )
-
-
-# --- Tenant registry -----------------------------------------------------
-
-
-async def test_tenant_can_be_registered(session: AsyncSession) -> None:
-    tenant = await service.create_tenant(session, slug="acme", name="Acme Ltd")
-
-    assert tenant.slug == "acme"
-    assert tenant.is_active is True
-
-
-async def test_tenant_slug_is_normalised(session: AsyncSession) -> None:
-    tenant = await service.create_tenant(session, slug="  ACME  ", name="Acme")
-
-    assert tenant.slug == "acme"
-
-
-async def test_duplicate_tenant_slug_is_refused(session: AsyncSession) -> None:
-    await service.create_tenant(session, slug="acme", name="Acme")
-
-    with pytest.raises(DuplicateTenantError):
-        await service.create_tenant(session, slug="acme", name="Acme Again")
-
-
-async def test_empty_tenant_slug_is_refused(session: AsyncSession) -> None:
-    with pytest.raises(InvalidPolicyError):
-        await service.create_tenant(session, slug="   ", name="Nameless")
-
-
-async def test_tenant_can_be_looked_up_by_id_and_slug(session: AsyncSession) -> None:
-    created = await service.create_tenant(session, slug="acme", name="Acme")
-
-    assert (await service.get_tenant(session, created.id)) is not None
-    assert (await service.get_tenant_by_slug(session, "ACME")) is not None
-
-
-async def test_listing_tenants_is_a_platform_operation(session: AsyncSession) -> None:
-    await service.create_tenant(session, slug="acme", name="Acme")
-    await service.create_tenant(session, slug="globex", name="Globex")
-
-    assert [t.slug for t in await service.list_tenants(session)] == ["acme", "globex"]
-
-
-async def test_inactive_tenant_is_not_usable(session: AsyncSession) -> None:
-    tenant = await service.create_tenant(session, slug="acme", name="Acme")
-    with system_scope():
-        tenant.is_active = False
-        await session.commit()
-
-    with pytest.raises(TenantNotFoundError):
-        await service.require_active_tenant(session, tenant.id)
-
-
-async def test_unknown_tenant_is_refused(session: AsyncSession) -> None:
-    with pytest.raises(TenantNotFoundError):
-        await service.require_active_tenant(session, uuid.uuid4())
-
-
-async def test_tenant_registry_is_global_not_tenant_scoped(
-    session: AsyncSession,
-    tenant_a: uuid.UUID,
-) -> None:
-    """The registry defines tenants, so it cannot be filtered by one."""
-    await service.create_tenant(session, slug="acme", name="Acme", tenant_id=tenant_a)
-
-    with tenant_scope(uuid.uuid4()):
-        found = (await session.execute(select(Tenant))).scalars().all()
-
-    assert [t.slug for t in found] == ["acme"]
 
 
 # --- Policy definition ---------------------------------------------------

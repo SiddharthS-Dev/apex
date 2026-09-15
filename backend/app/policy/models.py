@@ -7,13 +7,12 @@ any other tenant data. A condition names an attribute key, an operator and a
 list of literal operands; it does not know what the attribute means. That is
 what keeps the four undefined attribute domains out of the schema.
 
-**Tenant is global, and carries no foreign key from Identity.** The tenant
-registry is platform-level, so :class:`Tenant` inherits ``GlobalBase``. Identity
-tables carry ``tenant_id`` as a bare UUID rather than a foreign key into this
-table, because a foreign key would make Identity depend on Policy and invert
-the context map (Policy depends on Identity, never the reverse). Referential
-integrity for that edge is enforced in the service layer instead -- recorded as
-assumption **A-18**.
+**Tenant no longer lives here.** It moved to :mod:`app.platform.models` in
+P02. The tenant registry is control-plane data that Identity, Audit, Storage and
+Events all reference, and holding it in Policy forced those tables to carry
+``tenant_id`` as a bare UUID -- a foreign key would have inverted the context
+map. With Tenant in a context below all of them, the foreign keys are legal and
+are now enforced. This resolves assumption **A-18**; see ADR-0010.
 """
 
 from __future__ import annotations
@@ -31,23 +30,7 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.core.models import GlobalBase, TenantScopedBase
-
-
-class Tenant(GlobalBase):
-    """A tenant of the platform.
-
-    Global rather than tenant-scoped: the registry is what *defines* tenants,
-    so it cannot itself be filtered by the tenant it is looking for. Reading it
-    across tenants is a platform operation and requires ``system_scope()``.
-    """
-
-    __tablename__ = "tenant"
-    __table_args__ = (UniqueConstraint("slug", name="uq_tenant_slug"),)
-
-    slug: Mapped[str] = mapped_column(String(64), nullable=False)
-    name: Mapped[str] = mapped_column(String(200), nullable=False)
-    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+from app.core.models import TenantScopedBase
 
 
 class Policy(TenantScopedBase):

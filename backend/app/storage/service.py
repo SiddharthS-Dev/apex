@@ -11,6 +11,11 @@ bucket" are not expressible rather than merely forbidden.
 Validation happens before anything is written: size, then content type, then
 hashing. An object that fails validation leaves nothing behind in storage.
 
+**Residency is resolved per upload.** The tenant's object-storage region decides
+which bucket receives the bytes, and the region is recorded on the row. A strict
+tenant with no region assigned is refused rather than defaulted -- see
+:mod:`app.platform.residency`.
+
 This module deliberately exposes **no HTTP surface**. Uploading is something a
 caller does *to* something -- and what that something is, and who may do it, are
 Asset (A-02) and authority (A-04) questions. Adding an endpoint now would mean
@@ -29,6 +34,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import Settings, get_settings
 from app.core.tenancy import tenant_scope
+from app.platform.residency import ResidencyResolver, get_residency_resolver
 from app.storage.backend import ObjectMetadata, ObjectStore, S3ObjectStore
 from app.storage.errors import (
     ObjectNotFoundError,
@@ -108,6 +114,7 @@ async def upload(
     metadata: dict[str, str] | None = None,
     store: ObjectStore | None = None,
     resolver: LocationResolver | None = None,
+    residency: ResidencyResolver | None = None,
     settings: Settings | None = None,
     deduplicate: bool = True,
 ) -> UploadResult:
@@ -121,11 +128,18 @@ async def upload(
     settings = settings or get_settings()
     store = store or get_object_store()
     resolver = resolver or get_location_resolver()
+    residency = residency or get_residency_resolver()
 
     _validate_upload(data, content_type, settings)
 
     content_hash = compute_content_hash(data)
-    location = resolver.resolve(tenant_id)
+
+    # Residency decides the region; the location resolver maps region to
+    # bucket. A strict tenant with no object-storage region assigned raises
+    # here rather than silently landing in the default region.
+    placement = await residency.resolve(session, tenant_id)
+    region = placement.require("object_storage")
+    location = resolver.resolve(tenant_id, region=region)
 
     with tenant_scope(tenant_id):
         if deduplicate:
@@ -162,6 +176,7 @@ async def upload(
     with tenant_scope(tenant_id):
         record = StoredObject(
             bucket=location.bucket,
+            region_code=location.placement_region,
             object_key=key,
             content_hash=content_hash,
             size_bytes=len(data),
@@ -211,11 +226,17 @@ async def _require_reference(
 def _location_of(record: StoredObject) -> StorageLocation:
     """The location a stored object actually lives in.
 
-    Taken from the row rather than from current configuration, so objects
-    written before a bucket change remain readable (A-19).
+    Taken from the row -- bucket *and* region -- rather than from current
+    configuration, so an object written before a residency change stays
+    readable afterwards rather than being looked for in the wrong bucket
+    (A-19, A-25).
     """
     settings = get_settings()
-    return StorageLocation(bucket=record.bucket, region=settings.s3_region)
+    return StorageLocation(
+        bucket=record.bucket,
+        region=settings.s3_region,
+        placement_region=record.region_code,
+    )
 
 
 async def download(

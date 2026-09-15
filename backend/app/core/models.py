@@ -24,7 +24,7 @@ mixin rather than part of ``Base``.
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, MetaData, Uuid, func
+from sqlalchemy import DateTime, ForeignKey, MetaData, Uuid, func
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 # Explicit constraint naming. Without this, PostgreSQL invents names, Alembic
@@ -82,8 +82,15 @@ class TenantScoped:
     # Indexed because every tenant-scoped query filters on it. Declared on the
     # column rather than in ``__table_args__`` so that a subclass defining its
     # own table args does not silently drop the index.
+    #
+    # The foreign key is a string reference rather than an import, so ``core``
+    # gains no dependency on ``app.platform``. ``RESTRICT`` because deleting a
+    # tenant that owns data must be refused, not cascaded -- audit records are
+    # immutable by design, and a cascade would defeat that where it matters
+    # most (P02, resolves A-18).
     tenant_id: Mapped[uuid.UUID] = mapped_column(
         Uuid(as_uuid=True),
+        ForeignKey("tenant.id", ondelete="RESTRICT"),
         nullable=False,
         index=True,
     )

@@ -124,10 +124,14 @@ A published claim carries four things. Absent any of them, it does not publish.
 | **Validity window** | Between which dates is this assertion true? |
 
 The validity window is what makes expiry mechanical rather than aspirational.
-A claim outside its window is not "probably still fine" — it is not valid, the
-asset holding it becomes eligible for expiry (G6), and the
-`asset.expiry.due` event fires. See
-[ADR-0005](../adr/0005-evidence-gated-publication.md).
+A claim outside its window is not "probably still fine" — it is not valid, so
+**G2 Evidence Review** can no longer pass, and since **G6 Publication** requires
+G2, the artefact is no longer publishable. See
+[ADR-0011](../adr/0011-governance-gate-model.md).
+
+Retention is *not* a gate in the Master Prompt's sequence. What happens to an
+expired artefact — archive, supersede, retain — is a retention policy question
+that remains unspecified (**A-11**).
 
 ---
 
@@ -138,20 +142,24 @@ owner; no asset advances without that owner's recorded decision.
 
 | Gate | Decision | Authority |
 | --- | --- | --- |
-| G0 | Inventory — is this in scope and identified? | Knowledge Steward |
-| G1 | Technical verification — is it correct? | Domain Owner |
-| G2 | Claim verification — is every claim evidenced and valid? | Evidence authority |
-| G3 | Security and rights — may we hold and share this? | Rights authority |
-| G4 | Publication — may this go to its audience? | Publication authority |
-| G5 | Performance review — is it still earning its place? | Domain Owner |
-| G6 | Retention — retain, supersede or archive? | Retention authority |
+| G0 | **Intake** — is this sufficiently defined to enter the governed lifecycle? | Configurable |
+| G1 | **Validation** — is it structurally and factually valid? | Configurable |
+| G2 | **Evidence Review** — do material claims have adequate evidence and provenance? | Configurable |
+| G3 | **Business Review** — is it relevant, owned and justified? | Configurable |
+| G4 | **Risk & Compliance Review** — are security, compliance and operational risks acceptable? | Configurable |
+| G5 | **Executive Approval** — does the accountable decision-maker approve? | Configurable |
+| G6 | **Publication / Operational Release** — may this reach its audience? | Configurable |
 
-> **Assumption — pending master prompt.** The gate *names and sequence* are
-> taken from the development plan. The mapping of each gate to a concrete
-> organisational role, its SLA duration, escalation path and delegation rules
-> are **not** specified. The table above names an abstract decision owner per
-> gate so the state machine can be modelled; it does not assert who that is in
-> the organisation. Recorded as **A-04** in [assumptions.md](assumptions.md).
+> **Corrected in P02.** An earlier revision of this table used gate names from
+> the pre-specification strategy document, in which G4 was publication. Master
+> Prompt §16 names the sequence above: evidence review is **G2** and publication
+> is **G6**. See [ADR-0011](../adr/0011-governance-gate-model.md), which
+> supersedes ADR-0005.
+>
+> Authority is deliberately shown as *configurable* rather than naming roles.
+> §17 requires gate authority to be configuration, not code — which is what
+> resolves A-04. Separation of duties (a creator cannot approve their own
+> record) is enforced in code, being the one rule unsafe to leave switchable.
 
 ---
 

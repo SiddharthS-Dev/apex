@@ -28,6 +28,9 @@ from app.events import models as event_models  # noqa: F401  (Commit 020)
 
 # --- Foundation ---------------------------------------------------------
 from app.identity import models as identity_models  # noqa: F401  (Commit 004)
+
+# --- Platform (control plane) -------------------------------------------
+from app.platform import models as platform_models  # noqa: F401  (P02)
 from app.policy import models as policy_models  # noqa: F401  (Commit 005)
 from app.storage import models as storage_models  # noqa: F401  (Commit 008)
 

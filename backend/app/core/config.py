@@ -44,6 +44,18 @@ class Settings(BaseSettings):
     db_pool_recycle: int = 1800
     db_echo: bool = False
 
+    # --- Regions and residency ---------------------------------------
+    #: The region this deployment serves when a tenant assigns none.
+    default_region: str = "local"
+
+    #: Optional ``region=url,region=url`` map. Empty means single-region:
+    #: `default_region` is served by `database_url`, which is P02 behaviour.
+    database_urls: str = ""
+
+    #: Optional ``region=bucket,region=bucket`` map. Empty means every region
+    #: resolves to `s3_bucket`.
+    s3_buckets: str = ""
+
     # --- Object storage ----------------------------------------------
     #: Empty means "use the provider's default endpoint" -- i.e. real AWS S3.
     #: Anything else points at an S3-compatible server such as MinIO.

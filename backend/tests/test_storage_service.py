@@ -565,3 +565,107 @@ async def test_bucket_is_taken_from_the_row_not_from_configuration(
     result = await _upload(session, store, resolver, settings, tenant_a)
 
     assert result.stored_object.bucket == settings.s3_bucket
+
+
+# --- Residency (P02) -----------------------------------------------------
+
+
+async def test_upload_records_the_placement_region(
+    session: AsyncSession,
+    store: InMemoryObjectStore,
+    resolver: SingleBucketResolver,
+    settings: Settings,
+    tenant_a: uuid.UUID,
+) -> None:
+    """Where bytes sit is a recorded fact, not an inference from config."""
+    result = await _upload(session, store, resolver, settings, tenant_a)
+
+    assert result.stored_object.region_code == settings.default_region
+
+
+async def test_strict_tenant_without_a_storage_region_is_refused(
+    session: AsyncSession,
+    store: InMemoryObjectStore,
+    resolver: SingleBucketResolver,
+    settings: Settings,
+    tenant_a: uuid.UUID,
+) -> None:
+    """The decisive residency test for storage: refuse, never fall back.
+
+    Silently placing a strict tenant's bytes in the default region would be a
+    compliance failure reported as success.
+    """
+    from app.platform.models import ResidencyMode
+    from app.platform.residency import RegionUnavailableError, TenantResidency
+
+    class StrictUnassignedResolver:
+        async def resolve(self, session, tenant_id):  # type: ignore[no-untyped-def]
+            return TenantResidency(
+                mode=ResidencyMode.STRICT,
+                default_region=settings.default_region,
+                object_storage=None,
+            )
+
+    with pytest.raises(RegionUnavailableError, match="object_storage"):
+        await storage.upload(
+            session,
+            tenant_id=tenant_a,
+            data=CONTENT,
+            store=store,
+            resolver=resolver,
+            residency=StrictUnassignedResolver(),
+            settings=settings,
+        )
+
+
+async def test_a_refused_strict_upload_writes_nothing(
+    session: AsyncSession,
+    store: InMemoryObjectStore,
+    resolver: SingleBucketResolver,
+    settings: Settings,
+    tenant_a: uuid.UUID,
+) -> None:
+    from app.platform.models import ResidencyMode
+    from app.platform.residency import RegionUnavailableError, TenantResidency
+
+    class StrictUnassignedResolver:
+        async def resolve(self, session, tenant_id):  # type: ignore[no-untyped-def]
+            return TenantResidency(
+                mode=ResidencyMode.STRICT,
+                default_region=settings.default_region,
+                object_storage=None,
+            )
+
+    with pytest.raises(RegionUnavailableError):
+        await storage.upload(
+            session,
+            tenant_id=tenant_a,
+            data=CONTENT,
+            store=store,
+            resolver=resolver,
+            residency=StrictUnassignedResolver(),
+            settings=settings,
+        )
+
+    with tenant_scope(tenant_a):
+        assert (await session.execute(select(StoredObject))).scalars().all() == []
+
+
+async def test_objects_stay_readable_after_a_bucket_change(
+    session: AsyncSession,
+    store: InMemoryObjectStore,
+    resolver: SingleBucketResolver,
+    settings: Settings,
+    tenant_a: uuid.UUID,
+) -> None:
+    """Bucket and region come from the row, so a later residency change does
+    not strand what was written before it."""
+    result = await _upload(session, store, resolver, settings, tenant_a)
+    original_bucket = result.stored_object.bucket
+
+    data = await storage.download(
+        session, tenant_id=tenant_a, object_id=result.stored_object.id, store=store
+    )
+
+    assert data == CONTENT
+    assert result.stored_object.bucket == original_bucket

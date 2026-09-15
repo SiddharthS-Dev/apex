@@ -46,6 +46,12 @@ class StoredObject(TenantScopedBase):
     bucket: Mapped[str] = mapped_column(String(255), nullable=False)
     object_key: Mapped[str] = mapped_column(String(1024), nullable=False)
 
+    #: The APEX residency region these bytes physically occupy, recorded per
+    #: object rather than inferred from current configuration. Together with
+    #: `bucket` this makes placement a durable fact, so a later residency change
+    #: relocates new objects without stranding existing ones (A-19, A-25).
+    region_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
     #: SHA-256 of the content, hex encoded.
     content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     size_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)

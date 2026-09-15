@@ -1,0 +1,89 @@
+:root {
+  color-scheme: light dark;
+
+  --apex-bg: #f7f8fa;
+  --apex-surface: #ffffff;
+  --apex-border: #dfe3ea;
+  --apex-text: #12161d;
+  --apex-muted: #5a6474;
+  --apex-accent: #1f4ed8;
+  --apex-error: #b42318;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --apex-bg: #0d1117;
+    --apex-surface: #151b24;
+    --apex-border: #262d38;
+    --apex-text: #e7ebf1;
+    --apex-muted: #98a2b3;
+    --apex-accent: #7aa2ff;
+    --apex-error: #ff7b72;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--apex-bg);
+  color: var(--apex-text);
+  font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+  line-height: 1.55;
+}
+
+.shell {
+  max-width: 64rem;
+  margin: 0 auto;
+  padding: 3rem 1.5rem;
+}
+
+.shell__header h1 {
+  margin: 0;
+  font-size: 2.5rem;
+  letter-spacing: 0.08em;
+}
+
+.shell__tagline {
+  margin: 0.25rem 0 0;
+  color: var(--apex-muted);
+}
+
+.panel {
+  margin-top: 2.5rem;
+  padding: 1.5rem;
+  background: var(--apex-surface);
+  border: 1px solid var(--apex-border);
+  border-radius: 0.75rem;
+}
+
+.panel h2 {
+  margin: 0 0 1rem;
+  font-size: 1rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--apex-muted);
+}
+
+.facts {
+  display: grid;
+  grid-template-columns: minmax(8rem, max-content) 1fr;
+  gap: 0.5rem 1.5rem;
+  margin: 0;
+}
+
+.facts dt {
+  color: var(--apex-muted);
+}
+
+.facts dd {
+  margin: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.error {
+  margin: 0;
+  color: var(--apex-error);
+}

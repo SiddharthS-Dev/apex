@@ -1,0 +1,39 @@
+# ---------------------------------------------------------------
+# APEX — line ending and diff normalisation
+#
+# Text is normalised to LF in the repository regardless of the platform
+# it was authored on. Without this, Windows checkouts commit CRLF and
+# every cross-platform diff shows whole-file churn.
+# ---------------------------------------------------------------
+
+* text=auto eol=lf
+
+# Files that must keep LF to remain executable inside Linux containers
+*.sh            text eol=lf
+Dockerfile      text eol=lf
+*.Dockerfile    text eol=lf
+.dockerignore   text eol=lf
+*.conf          text eol=lf
+
+# Windows-only scripts keep CRLF
+*.bat           text eol=crlf
+*.cmd           text eol=crlf
+*.ps1           text eol=crlf
+
+# Binary assets -- never diffed or line-ending converted
+*.png           binary
+*.jpg           binary
+*.jpeg          binary
+*.gif           binary
+*.ico           binary
+*.webp          binary
+*.pdf           binary
+*.woff          binary
+*.woff2         binary
+*.ttf           binary
+*.otf           binary
+*.zip           binary
+*.gz            binary
+
+# Generated files: collapse in diffs and exclude from language statistics
+package-lock.json   linguist-generated=true -diff

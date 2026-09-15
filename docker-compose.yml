@@ -1,0 +1,72 @@
+# ---------------------------------------------------------------
+# APEX — local development stack
+#
+#   cp .env.example .env
+#   docker compose up --build
+#
+# Frontend  http://localhost:5173
+# Backend   http://localhost:8000  (docs at /docs)
+# Postgres  localhost:5432
+#
+# Object storage (MinIO) joins the stack in Commit 008.
+# ---------------------------------------------------------------
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-apex}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: ${POSTGRES_DB:-apex}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-apex} -d ${POSTGRES_DB:-apex}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    build:
+      context: ./backend
+      target: development
+    env_file:
+      - .env
+    environment:
+      APEX_BACKEND_HOST: 0.0.0.0
+      APEX_BACKEND_PORT: 8000
+    ports:
+      - "${APEX_BACKEND_PORT:-8000}:8000"
+    volumes:
+      - ./backend:/srv/apex
+      # Keep the image's virtualenv from being shadowed by the bind mount.
+      - /srv/apex/.venv
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health')\""]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+  frontend:
+    build:
+      context: ./frontend
+      target: development
+    environment:
+      VITE_APEX_API_BASE_URL: ${VITE_APEX_API_BASE_URL:-http://localhost:8000/api/v1}
+    ports:
+      - "5173:5173"
+    volumes:
+      - ./frontend:/srv/apex
+      # Use the image's node_modules rather than the host's.
+      - /srv/apex/node_modules
+    depends_on:
+      - backend
+
+volumes:
+  postgres-data:

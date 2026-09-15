@@ -35,10 +35,12 @@ from contextlib import contextmanager
 from contextvars import ContextVar, Token
 from typing import Any
 
-from sqlalchemy import event
+from sqlalchemy import Table, event
 from sqlalchemy.orm import ORMExecuteState, Session, with_loader_criteria
+from sqlalchemy.sql import Join, Select
+from sqlalchemy.sql.expression import FromClause
 
-from app.core.models import TenantScoped
+from app.core.models import Base, TenantScoped
 
 _current_tenant: ContextVar[uuid.UUID | None] = ContextVar(
     "apex_current_tenant",
@@ -113,8 +115,44 @@ def system_scope() -> Iterator[None]:
         _system_scope.reset(token)
 
 
-def _touches_tenant_scoped(state: ORMExecuteState) -> bool:
-    """Whether this statement involves any tenant-scoped entity."""
+def _tenant_scoped_tables() -> set[Table]:
+    """Every physical table belonging to a tenant-scoped mapper."""
+    return {
+        mapper.local_table
+        for mapper in Base.registry.mappers
+        if isinstance(mapper.class_, type)
+        and issubclass(mapper.class_, TenantScoped)
+        and isinstance(mapper.local_table, Table)
+    }
+
+
+def _tables_in(from_clause: FromClause) -> Iterator[Table]:
+    """Walk a FROM element, yielding the plain tables it contains."""
+    if isinstance(from_clause, Join):
+        yield from _tables_in(from_clause.left)
+        yield from _tables_in(from_clause.right)
+    elif isinstance(from_clause, Table):
+        yield from_clause
+
+
+def _scoped_tables_in(statement: Any) -> list[Table]:
+    """Tenant-scoped tables this statement selects from."""
+    if not isinstance(statement, Select):
+        return []
+
+    scoped = _tenant_scoped_tables()
+    found: list[Table] = []
+    for from_clause in statement.get_final_froms():
+        for table in _tables_in(from_clause):
+            if table in scoped and table not in found:
+                found.append(table)
+    return found
+
+
+def _touches_tenant_scoped(state: ORMExecuteState, scoped_tables: list[Table]) -> bool:
+    """Whether this statement involves any tenant-scoped data."""
+    if scoped_tables:
+        return True
     return any(
         isinstance(mapper.class_, type) and issubclass(mapper.class_, TenantScoped)
         for mapper in state.all_mappers
@@ -123,7 +161,27 @@ def _touches_tenant_scoped(state: ORMExecuteState) -> bool:
 
 @event.listens_for(Session, "do_orm_execute")
 def _apply_tenant_filter(state: ORMExecuteState) -> None:
-    """Filter every ORM SELECT to the active tenant, or refuse it."""
+    """Filter every ORM SELECT to the active tenant, or refuse it.
+
+    Two mechanisms are applied together, because neither alone is sufficient:
+
+    ``with_loader_criteria``
+        Covers *entity* loads, including relationship loads and aliases.
+
+    An explicit predicate per tenant-scoped table in the FROM clause
+        Covers statements that select **columns** rather than entities --
+        ``select(Permission.code).join(UserRole)``, for example.
+        ``with_loader_criteria`` does not constrain a table that is only joined
+        to, so without this a column-level query would read across tenants.
+        That gap was a real cross-tenant leak, caught by
+        ``test_permissions_do_not_leak_between_tenants``.
+
+    Known limitation: a tenant-scoped table brought in by an ``OUTER JOIN``
+    receives the same predicate, which makes unmatched rows drop out as if the
+    join were inner. Filtering is the safe direction to err in, but a query
+    that genuinely needs outer-join semantics across a tenant boundary must use
+    :func:`system_scope` and filter explicitly.
+    """
     if not state.is_select:
         return
     # Column and relationship loads inherit the criteria of the query that
@@ -134,7 +192,9 @@ def _apply_tenant_filter(state: ORMExecuteState) -> None:
         return
     if in_system_scope():
         return
-    if not _touches_tenant_scoped(state):
+
+    scoped_tables = _scoped_tables_in(state.statement)
+    if not _touches_tenant_scoped(state, scoped_tables):
         return
 
     tenant = _current_tenant.get()
@@ -145,10 +205,15 @@ def _apply_tenant_filter(state: ORMExecuteState) -> None:
             "genuinely a platform-level operation."
         )
 
+    statement = state.statement
+    if isinstance(statement, Select):
+        for table in scoped_tables:
+            statement = statement.where(table.c.tenant_id == tenant)
+
     # Closure variables in this lambda are tracked by SQLAlchemy's lambda
     # statement system and extracted as bound parameters, so the per-tenant
     # value is not baked into the compiled-statement cache.
-    state.statement = state.statement.options(
+    state.statement = statement.options(
         with_loader_criteria(
             TenantScoped,
             lambda cls: cls.tenant_id == tenant,

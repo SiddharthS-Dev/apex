@@ -18,6 +18,7 @@ live in code comments instead.
 | [0006](0006-integration-by-reference-and-event.md) | Integration by reference and event | Accepted |
 | [0007](0007-append-only-audit-log.md) | Append-only audit log | Accepted |
 | [0008](0008-shared-schema-multi-tenancy.md) | Shared-schema multi-tenancy with enforced isolation | Accepted |
+| [0009](0009-local-first-authentication.md) | Local-first authentication with an OIDC-ready identity model | Accepted |
 
 ---
 

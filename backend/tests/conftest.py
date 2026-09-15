@@ -5,9 +5,16 @@ SQLite. Tenant isolation depends on SQLAlchemy ORM event behaviour and on
 PostgreSQL types (``uuid``, ``timestamptz``); verifying it against a different
 dialect would prove something other than what ships.
 
-Set ``APEX_TEST_DATABASE_URL`` to point at a disposable database. When none is
-reachable, the database-backed tests skip rather than fail, so the suite stays
-runnable without Docker.
+Point ``APEX_TEST_DATABASE_URL`` at a **disposable** database -- the schema is
+dropped and recreated per test. It must not be the database Alembic manages,
+or the migration state and the actual tables will disagree. When no database is
+reachable, these tests skip rather than fail, so the suite stays runnable
+without Docker.
+
+API tests drive the app through ``httpx.ASGITransport`` rather than
+``TestClient``, so the request runs on the same event loop as the test. A
+database connection is bound to the loop that created it; a client that runs
+the app on its own loop cannot share the test's session.
 """
 
 from __future__ import annotations
@@ -18,25 +25,33 @@ from collections.abc import AsyncIterator
 
 import pytest
 import pytest_asyncio
+from fastapi import FastAPI
+from httpx import ASGITransport, AsyncClient
 from sqlalchemy import String, text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, create_async_engine
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.pool import NullPool
 
+# Importing the registry registers every model with Base.metadata.
+from app.core import registry  # noqa: F401
 from app.core.models import Base, GlobalBase, TenantScopedBase
+
+# Configure the event loop policy before pytest-asyncio creates a loop.
+# This otherwise happens as a side effect of importing app.core.database, which
+# makes it depend on which test modules were collected -- running one file in
+# isolation would fail to connect while the full suite succeeded.
+from app.core.runtime import configure_event_loop_policy  # noqa: E402
+
+configure_event_loop_policy()
 
 TEST_DATABASE_URL = os.environ.get(
     "APEX_TEST_DATABASE_URL",
-    "postgresql+psycopg://apex:apex@localhost:5432/apex",
+    "postgresql+psycopg://apex:apex@localhost:5432/apex_test",
 )
 
 
 class TenantWidget(TenantScopedBase):
-    """Throwaway tenant-scoped model, defined only for the test suite.
-
-    Deliberately not part of the application schema: Commit 003 introduces the
-    database foundation, not domain tables.
-    """
+    """Throwaway tenant-scoped model, defined only for the test suite."""
 
     __tablename__ = "_test_tenant_widget"
 
@@ -51,12 +66,9 @@ class GlobalWidget(GlobalBase):
     name: Mapped[str] = mapped_column(String(64), nullable=False)
 
 
-TEST_TABLES = [TenantWidget.__table__, GlobalWidget.__table__]
-
-
 @pytest_asyncio.fixture
 async def engine() -> AsyncIterator[AsyncEngine]:
-    """An engine against the test database, or skip if unreachable."""
+    """An engine against a freshly built test schema, or skip if unreachable."""
     candidate = create_async_engine(TEST_DATABASE_URL, poolclass=NullPool)
     try:
         async with candidate.connect() as connection:
@@ -66,13 +78,13 @@ async def engine() -> AsyncIterator[AsyncEngine]:
         pytest.skip(f"No test database at {TEST_DATABASE_URL}: {type(exc).__name__}")
 
     async with candidate.begin() as connection:
-        await connection.run_sync(Base.metadata.drop_all, tables=TEST_TABLES)
-        await connection.run_sync(Base.metadata.create_all, tables=TEST_TABLES)
+        await connection.run_sync(Base.metadata.drop_all)
+        await connection.run_sync(Base.metadata.create_all)
 
     yield candidate
 
     async with candidate.begin() as connection:
-        await connection.run_sync(Base.metadata.drop_all, tables=TEST_TABLES)
+        await connection.run_sync(Base.metadata.drop_all)
     await candidate.dispose()
 
 
@@ -81,6 +93,30 @@ async def session(engine: AsyncEngine) -> AsyncIterator[AsyncSession]:
     """A session bound to the test database."""
     async with AsyncSession(engine, expire_on_commit=False) as db_session:
         yield db_session
+
+
+@pytest_asyncio.fixture
+async def app(session: AsyncSession) -> AsyncIterator[FastAPI]:
+    """The application, with its database dependency bound to the test session."""
+    from app.identity.dependencies import db_session as db_session_dependency
+    from app.main import create_app
+
+    application = create_app()
+
+    async def _override() -> AsyncIterator[AsyncSession]:
+        yield session
+
+    application.dependency_overrides[db_session_dependency] = _override
+    yield application
+    application.dependency_overrides.clear()
+
+
+@pytest_asyncio.fixture
+async def client(app: FastAPI) -> AsyncIterator[AsyncClient]:
+    """An HTTP client driving the app in this test's event loop."""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://apex.test") as http_client:
+        yield http_client
 
 
 @pytest.fixture

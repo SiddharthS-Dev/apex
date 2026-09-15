@@ -1,0 +1,166 @@
+# C4 Level 2 — Containers
+
+The deployable units inside APEX and how they communicate.
+
+Node borders distinguish what exists today from what is planned:
+**solid** containers are running as of Commit 001, **dashed** containers arrive
+in a later increment, annotated with the commit that introduces them.
+
+---
+
+```mermaid
+---
+config:
+  theme: base
+  look: classic
+  themeVariables:
+    fontFamily: Segoe UI, Calibri, Arial
+    fontSize: 15px
+    background: "#FFFDF6"
+    primaryColor: "#EAF5E2"
+    primaryTextColor: "#1F2937"
+    primaryBorderColor: "#4CAF50"
+    secondaryColor: "#FFF7CC"
+    tertiaryColor: "#F6F2FF"
+    lineColor: "#555555"
+    textColor: "#222222"
+    edgeLabelBackground: "#FFFDF6"
+    clusterBkg: "#FFF9D6"
+    clusterBorder: "#D9C97C"
+    nodeBorder: "#888888"
+    actorBkg: "#FFF4B5"
+    actorBorder: "#C8A000"
+---
+flowchart TB
+    person["Authenticated User<br/><i>Browser</i>"]
+
+    subgraph apexsys["APEX"]
+        direction TB
+
+        subgraph presentation["Presentation"]
+            spa["Web Application<br/><b>React 19 + TypeScript + Vite</b><br/><i>SPA - holds no authority</i>"]
+        end
+
+        subgraph application["Application"]
+            api["API Service<br/><b>Python + FastAPI</b><br/><i>Authorisation, lifecycle,<br/>evidence and gate rules</i>"]
+            worker["Ingestion Worker<br/><b>Python</b><br/><i>Extraction, scanning,<br/>chunking, embedding</i><br/>— Commit 019 —"]
+            aisvc["AI Service<br/><b>Python</b><br/><i>Grounded RAG, agents,<br/>model and prompt registries</i><br/>— Commit 026 —"]
+        end
+
+        subgraph data["Data"]
+            pg[("PostgreSQL 16<br/><b>+ pgvector</b><br/><i>Relational, full-text<br/>and vector - one store</i>")]
+            obj[("Object Storage<br/><b>S3-compatible</b><br/><i>Asset binaries</i><br/>— Commit 008 —")]
+        end
+    end
+
+    idp["Identity Provider<br/><i>OIDC</i>"]
+    src["Authoritative<br/>Source Systems"]
+    model["Model Provider"]
+
+    person -->|"HTTPS"| spa
+    spa -->|"JSON over HTTPS<br/>bearer token"| api
+
+    api -->|"SQL"| pg
+    api -->|"signed URLs"| obj
+    api -->|"validates token"| idp
+
+    api -.->|"enqueues work"| worker
+    worker -->|"SQL - writes chunks<br/>and embeddings"| pg
+    worker -->|"reads binaries"| obj
+
+    api -.->|"delegates grounded queries"| aisvc
+    aisvc -->|"authorised retrieval only"| pg
+    aisvc -.->|"embeddings, completions"| model
+
+    src -.->|"integration events"| api
+
+    classDef application fill:#E9F7E7,stroke:#4CAF50,color:#1F2937,stroke-width:2px;
+    classDef service     fill:#E7F5FF,stroke:#2196F3,color:#1F2937,stroke-width:2px;
+    classDef database    fill:#FFF7C8,stroke:#D4A017,color:#3B2F00,stroke-width:2px;
+    classDef storage     fill:#FFF7C8,stroke:#B8860B,color:#3B2F00,stroke-width:2px;
+    classDef ai          fill:#F7ECFF,stroke:#9C27B0,color:#4A148C,stroke-width:2px;
+    classDef external    fill:#F7F7F7,stroke:#9E9E9E,color:#424242,stroke-width:2px;
+    classDef security    fill:#F4E8FF,stroke:#7E57C2,color:#311B92,stroke-width:2px;
+    classDef user        fill:#FFF6C9,stroke:#D6B500,color:#5A4A00,stroke-width:2px;
+    classDef planned     fill:#FFFDF0,stroke:#B0A060,color:#5D4037,stroke-width:2px,stroke-dasharray: 5 4;
+
+    class person user;
+    class spa application;
+    class api service;
+    class pg database;
+    class worker,aisvc,obj planned;
+    class model ai;
+    class idp security;
+    class src external;
+
+    style presentation fill:#F5FFE8,stroke:#D9C97C,stroke-width:1px
+    style application fill:#EEF8FF,stroke:#D9C97C,stroke-width:1px
+    style data fill:#FFFBE6,stroke:#D9C97C,stroke-width:1px
+    style apexsys fill:#FCFCFA,stroke:#BFB98A,stroke-width:2px
+```
+
+---
+
+## Containers
+
+| Container | Technology | Responsibility | Status |
+| --- | --- | --- | --- |
+| **Web Application** | React 19, TypeScript, Vite | Renders the UI. Holds no authority: it displays what the API returns and hides nothing the API would have disclosed. | Commit 001 |
+| **API Service** | Python 3.11+, FastAPI | The single policy decision point. Owns authorisation, asset lifecycle transitions, evidence rules, gate progression and audit writes. | Commit 001 |
+| **PostgreSQL** | Postgres 16 + `pgvector` | System of record. Relational data, full-text indexes and vector embeddings in one store so retrieval and permission filtering share a query plane. | Provisioned Commit 001, schema Commit 003 |
+| **Object Storage** | S3-compatible | Asset binaries. Access only via server-issued signed URLs. | Commit 008 |
+| **Ingestion Worker** | Python | Out-of-band document extraction, malware and sensitive-data scanning, chunking, embedding generation. | Commit 019 |
+| **AI Service** | Python | Grounded retrieval, citation assembly, bounded agent execution. Reads only through the authorisation layer. | Commit 026 |
+
+---
+
+## Why the API service is a single container
+
+APEX is deployed as one API process containing many bounded contexts, not as a
+fleet of services. The contexts are separated in code and in schema, not across
+a network. The reasoning — and the conditions under which a context should be
+extracted — is in
+[ADR-0003](../adr/0003-modular-monolith-with-bounded-contexts.md).
+
+The short version: the platform's central invariants are *cross-cutting*. A
+permission check spans identity, policy, asset and audit; a gate transition
+spans governance, evidence and audit. Enforcing those across process boundaries
+means distributed transactions, or accepting that the invariants can be
+violated in the window between calls. Neither is acceptable for a system whose
+purpose is provable governance.
+
+The worker and AI service are separated because their failure modes and
+scaling profiles genuinely differ: a stuck PDF extraction or a slow model call
+must not consume request-handling capacity.
+
+---
+
+## Communication
+
+| Path | Protocol | Notes |
+| --- | --- | --- |
+| Browser → Web App | HTTPS | Static bundle served by nginx in production. |
+| Web App → API | JSON / HTTPS | Bearer token on every call. No session affinity. |
+| API → PostgreSQL | SQL | Connection pooled. Every query that returns assets is policy-filtered. |
+| API → Object Storage | S3 API | Clients never receive raw credentials — only short-lived signed URLs. |
+| API → Worker | Queue | Transport decided in Commit 019; the event contract (Commit 020) is written so the transport can change without touching producers or consumers. |
+| Sources → API | Integration events | Idempotent, with event/correlation/causation IDs and a dead-letter path. |
+
+---
+
+## Deployment
+
+The Compose stack (`docker-compose.yml`) runs postgres, backend and frontend
+for local development. Production packaging exists in both Dockerfiles as a
+separate `production` target — nginx serving the static bundle, uvicorn without
+reload, non-root user.
+
+> **Assumption — pending master prompt.** The target production environment
+> (cloud provider, orchestrator, regions, tenancy isolation model) is not yet
+> specified. Nothing in this layer depends on that choice: all containers are
+> stateless apart from the two data stores. Recorded as **A-05** in
+> [assumptions.md](assumptions.md).
+
+---
+
+**Previous:** [C4 Level 1 — Context](context.md) · **Next:** [C4 Level 3 — Components](components.md)

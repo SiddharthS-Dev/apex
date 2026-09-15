@@ -39,6 +39,26 @@ The reasoning behind these choices is recorded in
 
 ---
 
+## Architecture
+
+| Document | What it answers |
+| --- | --- |
+| [System context](docs/architecture/context.md) | Who uses APEX, and what it depends on |
+| [Containers](docs/architecture/containers.md) | What is deployed, and how the pieces talk |
+| [Components](docs/architecture/components.md) | What is inside the API service |
+| [Domain boundaries](docs/architecture/domain-boundaries.md) | Which context owns what, and how to cross |
+| [Authority boundaries](docs/architecture/authority-boundaries.md) | Which system or role may assert what |
+| [Assumptions](docs/architecture/assumptions.md) | What was inferred, and what must be reconciled |
+| [Decision records](docs/adr/README.md) | Why the load-bearing choices were made |
+
+Four guarantees hold the design together — no read path can bypass
+authorisation, no unevidenced claim can publish, no authoritative record is
+duplicated, and no audit entry can be altered. Each is a structural property
+rather than a review outcome; see the
+[architecture index](docs/architecture/README.md).
+
+---
+
 ## Quick start
 
 ### With Docker (recommended)

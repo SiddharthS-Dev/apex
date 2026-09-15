@@ -14,6 +14,7 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.audit import service as audit
 from app.core.config import Settings
 from app.core.tenancy import TenantContextMissingError, system_scope, tenant_scope
 from app.storage import service as storage
@@ -669,3 +670,264 @@ async def test_objects_stay_readable_after_a_bucket_change(
 
     assert data == CONTENT
     assert result.stored_object.bucket == original_bucket
+
+
+# --- Audit integration (Master Prompt 10 and 25) -------------------------
+
+
+async def test_upload_is_audited(
+    session: AsyncSession,
+    store: InMemoryObjectStore,
+    resolver: SingleBucketResolver,
+    settings: Settings,
+    tenant_a: uuid.UUID,
+) -> None:
+    result = await _upload(session, store, resolver, settings, tenant_a, filename="a.txt")
+
+    events = await audit.list_events(
+        session, tenant_id=tenant_a, action="storage.object.stored"
+    )
+    assert len(events) == 1
+    assert events[0].resource_id == result.stored_object.id
+    assert events[0].outcome == "success"
+
+
+async def test_upload_audit_records_the_hash_not_the_content(
+    session: AsyncSession,
+    store: InMemoryObjectStore,
+    resolver: SingleBucketResolver,
+    settings: Settings,
+    tenant_a: uuid.UUID,
+) -> None:
+    """An audit record is a record, not a second copy of the object."""
+    await _upload(session, store, resolver, settings, tenant_a)
+
+    event = (await audit.list_events(session, tenant_id=tenant_a))[0]
+
+    assert event.context["content_sha256"] == storage.compute_content_hash(CONTENT)
+    assert CONTENT.decode() not in str(event.context)
+
+
+async def test_the_content_digest_survives_redaction(
+    session: AsyncSession,
+    store: InMemoryObjectStore,
+    resolver: SingleBucketResolver,
+    settings: Settings,
+    tenant_a: uuid.UUID,
+) -> None:
+    """Regression. The redaction deny-list matches the fragment "hash", so a
+    context key called `content_hash` was stored as [redacted] -- removing the
+    one piece of integrity evidence the record exists to carry.
+
+    The field is named `content_sha256` instead. Weakening the deny-list would
+    have let `pwd_hash` and similar reach an immutable record, which is the
+    worse trade.
+    """
+    from app.core.redaction import REDACTED, is_sensitive_key
+
+    await _upload(session, store, resolver, settings, tenant_a)
+    event = (await audit.list_events(session, tenant_id=tenant_a))[0]
+
+    assert event.context["content_sha256"] != REDACTED
+    assert len(event.context["content_sha256"]) == 64
+    # The deny-list still protects credential digests.
+    assert is_sensitive_key("pwd_hash") is True
+    assert is_sensitive_key("content_hash") is True
+
+
+async def test_delete_is_audited_with_before_and_after(
+    session: AsyncSession,
+    store: InMemoryObjectStore,
+    resolver: SingleBucketResolver,
+    settings: Settings,
+    tenant_a: uuid.UUID,
+) -> None:
+    """Deletion without a record is the gap that leaves a governance platform
+    unable to answer what happened."""
+    result = await _upload(session, store, resolver, settings, tenant_a)
+    await storage.delete(
+        session,
+        tenant_id=tenant_a,
+        object_id=result.stored_object.id,
+        reason="superseded",
+        store=store,
+    )
+
+    deletions = await audit.list_events(
+        session, tenant_id=tenant_a, action="storage.object.deleted"
+    )
+    assert len(deletions) == 1
+    assert deletions[0].before_state == {"is_deleted": False}
+    assert deletions[0].after_state is not None
+    assert deletions[0].after_state["reason"] == "superseded"
+
+
+async def test_signed_url_issuance_is_audited(
+    session: AsyncSession,
+    store: InMemoryObjectStore,
+    resolver: SingleBucketResolver,
+    settings: Settings,
+    tenant_a: uuid.UUID,
+) -> None:
+    result = await _upload(session, store, resolver, settings, tenant_a)
+    await storage.signed_download_url(
+        session,
+        tenant_id=tenant_a,
+        object_id=result.stored_object.id,
+        store=store,
+        settings=settings,
+    )
+    await session.commit()
+
+    issued = await audit.list_events(
+        session, tenant_id=tenant_a, action="storage.object.signed_url_issued"
+    )
+    assert len(issued) == 1
+    assert issued[0].context["expires_in_seconds"] > 0
+
+
+async def test_the_signed_url_itself_is_never_recorded(
+    session: AsyncSession,
+    store: InMemoryObjectStore,
+    resolver: SingleBucketResolver,
+    settings: Settings,
+    tenant_a: uuid.UUID,
+) -> None:
+    """A signed URL is a bearer credential, and an immutable log is the worst
+    possible place to keep one."""
+    result = await _upload(session, store, resolver, settings, tenant_a)
+    url = await storage.signed_download_url(
+        session,
+        tenant_id=tenant_a,
+        object_id=result.stored_object.id,
+        store=store,
+        settings=settings,
+    )
+    await session.commit()
+
+    with system_scope():
+        rendered = str(
+            [
+                (e.context, e.before_state, e.after_state)
+                for e in await audit.list_events_across_tenants(session)
+            ]
+        )
+
+    assert url not in rendered
+    assert "memory://" not in rendered
+
+
+async def test_cross_tenant_access_is_audited_as_denied(
+    session: AsyncSession,
+    store: InMemoryObjectStore,
+    resolver: SingleBucketResolver,
+    settings: Settings,
+    tenant_a: uuid.UUID,
+    tenant_b: uuid.UUID,
+) -> None:
+    """A refusal is exactly the event most worth having."""
+    result = await _upload(session, store, resolver, settings, tenant_b)
+
+    with pytest.raises(ObjectNotFoundError):
+        await storage.download(
+            session, tenant_id=tenant_a, object_id=result.stored_object.id, store=store
+        )
+    await session.commit()
+
+    denials = await audit.list_events(
+        session, tenant_id=tenant_a, action="storage.object.access_denied"
+    )
+    assert len(denials) == 1
+    assert denials[0].outcome == "denied"
+    assert denials[0].resource_id == result.stored_object.id
+
+
+async def test_a_denial_is_recorded_against_the_asking_tenant_only(
+    session: AsyncSession,
+    store: InMemoryObjectStore,
+    resolver: SingleBucketResolver,
+    settings: Settings,
+    tenant_a: uuid.UUID,
+    tenant_b: uuid.UUID,
+) -> None:
+    """A probe aimed at tenant B must not surface in B's own trail as though B
+    had made it."""
+    result = await _upload(session, store, resolver, settings, tenant_b)
+
+    with pytest.raises(ObjectNotFoundError):
+        await storage.download(
+            session, tenant_id=tenant_a, object_id=result.stored_object.id, store=store
+        )
+    await session.commit()
+
+    assert (
+        list(
+            await audit.list_events(
+                session, tenant_id=tenant_b, action="storage.object.access_denied"
+            )
+        )
+        == []
+    )
+
+
+async def test_integrity_failure_is_audited(
+    session: AsyncSession,
+    store: InMemoryObjectStore,
+    resolver: SingleBucketResolver,
+    settings: Settings,
+    tenant_a: uuid.UUID,
+) -> None:
+    """Substituted bytes are a security event, not a miss."""
+    result = await _upload(session, store, resolver, settings, tenant_a)
+    await store.put(
+        resolver.resolve(tenant_a), result.stored_object.object_key, b"tampered"
+    )
+
+    with pytest.raises(ObjectNotFoundError, match="integrity"):
+        await storage.download(
+            session, tenant_id=tenant_a, object_id=result.stored_object.id, store=store
+        )
+    await session.commit()
+
+    failures = await audit.list_events(
+        session, tenant_id=tenant_a, action="storage.object.integrity_check_failed"
+    )
+    assert len(failures) == 1
+    assert failures[0].outcome == "failure"
+
+
+def test_storage_actions_are_catalogued_and_technical() -> None:
+    """No business taxonomy invented -- A-24 stays open."""
+    from app.audit.actions import ActionOrigin, get_action
+
+    for name in (
+        "storage.object.stored",
+        "storage.object.deleted",
+        "storage.object.signed_url_issued",
+        "storage.object.access_denied",
+        "storage.object.integrity_check_failed",
+    ):
+        spec = get_action(name)
+        assert spec is not None
+        assert spec.origin == ActionOrigin.TECHNICAL
+
+
+async def test_an_audit_failure_does_not_break_the_upload(
+    session: AsyncSession,
+    store: InMemoryObjectStore,
+    resolver: SingleBucketResolver,
+    settings: Settings,
+    tenant_a: uuid.UUID,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Losing a record is bad; losing the object because the record failed is
+    worse. Audit is attempted, never depended on for control flow."""
+
+    async def _explode(*args: object, **kwargs: object) -> None:
+        raise RuntimeError("audit backend unavailable")
+
+    monkeypatch.setattr("app.storage.service.audit.record", _explode)
+
+    result = await _upload(session, store, resolver, settings, tenant_a)
+
+    assert result.stored_object.id is not None

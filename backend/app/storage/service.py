@@ -11,6 +11,19 @@ bucket" are not expressible rather than merely forbidden.
 Validation happens before anything is written: size, then content type, then
 hashing. An object that fails validation leaves nothing behind in storage.
 
+**Every operation is audited**, including refusals. Master Prompt §25 requires
+audit coverage of material actions, and an object deleted without a record is
+exactly the gap that makes a governance platform unable to answer what happened.
+
+Two transaction shapes, matching :mod:`app.audit.service`:
+
+- ``upload`` and ``delete`` already own a transaction, so their audit record
+  joins it and commits atomically with the metadata change.
+- Refusals and signed-URL issuance own no transaction. They take an optional
+  ``audit_session_factory``; given one, the record is written independently so
+  it survives a caller rollback. Without one the record joins the caller's
+  transaction, which is the weaker guarantee and is documented as such.
+
 **Residency is resolved per upload.** The tenant's object-storage region decides
 which bucket receives the bytes, and the region is recorded on the row. A strict
 tenant with no region assigned is refused rather than defaulted -- see
@@ -25,13 +38,16 @@ inventing both.
 from __future__ import annotations
 
 import hashlib
+import logging
 import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass
 
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.audit import actions as audit_actions
+from app.audit import service as audit
 from app.core.config import Settings, get_settings
 from app.core.tenancy import tenant_scope
 from app.platform.residency import ResidencyResolver, get_residency_resolver
@@ -48,6 +64,8 @@ from app.storage.locations import (
     get_location_resolver,
 )
 from app.storage.models import StoredObject
+
+logger = logging.getLogger(__name__)
 
 _store: ObjectStore | None = None
 
@@ -73,6 +91,30 @@ class UploadResult:
     stored_object: StoredObject
     metadata: ObjectMetadata
     deduplicated: bool = False
+
+
+AuditFactory = async_sessionmaker[AsyncSession] | None
+
+
+async def _audit(
+    session: AsyncSession,
+    factory: AuditFactory,
+    **kwargs: object,
+) -> None:
+    """Record a storage event, independently when a factory is supplied.
+
+    Failures here are swallowed deliberately: an audit backend problem must not
+    turn a successful upload into an error the caller cannot act on. The write
+    is attempted, never depended upon for control flow. Losing a record is bad;
+    losing the object because the record failed is worse.
+    """
+    try:
+        if factory is not None:
+            await audit.record_independently(factory, **kwargs)
+        else:
+            await audit.record(session, **kwargs)
+    except Exception:  # noqa: BLE001 -- audit must never break the operation
+        logger.exception("Could not record a storage audit event")
 
 
 def compute_content_hash(data: bytes) -> str:
@@ -117,6 +159,7 @@ async def upload(
     residency: ResidencyResolver | None = None,
     settings: Settings | None = None,
     deduplicate: bool = True,
+    actor_id: uuid.UUID | None = None,
 ) -> UploadResult:
     """Store bytes for a tenant and record the reference.
 
@@ -185,6 +228,36 @@ async def upload(
             storage_metadata=dict(metadata or {}),
         )
         session.add(record)
+        # Flush first: the primary key is generated at flush, so auditing
+        # before this recorded resource_id=None -- an audit event that could
+        # not say which object it was about.
+        await session.flush()
+        # Joined to this transaction, so the object reference and the record of
+        # its creation commit together or not at all.
+        await _audit(
+            session,
+            None,
+            tenant_id=tenant_id,
+            action=audit_actions.OBJECT_STORED,
+            actor_id=actor_id,
+            resource_type=audit_actions.ResourceType.STORED_OBJECT,
+            resource_id=record.id,
+            resource_label=filename,
+            context={
+                # Named `content_sha256`, not `content_hash`: the redaction
+                # deny-list matches the fragment "hash" so that `pwd_hash` and
+                # friends never reach an immutable record, and it caught this
+                # too. A content digest is integrity metadata, not a
+                # credential -- and it is precisely what an audit record needs
+                # in order to say which bytes were stored. Naming the field for
+                # what it actually is resolves both concerns; weakening the
+                # deny-list would not.
+                "content_sha256": content_hash,
+                "size_bytes": len(data),
+                "content_type": content_type,
+                "region": location.placement_region,
+            },
+        )
         await session.commit()
 
     return UploadResult(stored_object=record, metadata=written)
@@ -210,9 +283,26 @@ async def _require_reference(
     session: AsyncSession,
     tenant_id: uuid.UUID,
     object_id: uuid.UUID,
+    *,
+    actor_id: uuid.UUID | None = None,
+    audit_session_factory: AuditFactory = None,
 ) -> StoredObject:
     record = await get_reference(session, tenant_id=tenant_id, object_id=object_id)
     if record is None or record.is_deleted:
+        # Audited as DENIED, not FAILURE: someone asked for an object this
+        # tenant cannot reach, which is worth seeing whether it was a stale
+        # reference or a probe.
+        await _audit(
+            session,
+            audit_session_factory,
+            tenant_id=tenant_id,
+            action=audit_actions.OBJECT_ACCESS_DENIED,
+            outcome=audit_actions.Outcome.DENIED,
+            actor_id=actor_id,
+            resource_type=audit_actions.ResourceType.STORED_OBJECT,
+            resource_id=object_id,
+            context={"reason": "not_found_or_deleted"},
+        )
         # Another tenant's object is invisible under this scope, so it is
         # genuinely absent rather than forbidden -- and the response cannot
         # confirm that the id exists elsewhere.
@@ -246,14 +336,34 @@ async def download(
     object_id: uuid.UUID,
     store: ObjectStore | None = None,
     verify_hash: bool = True,
+    actor_id: uuid.UUID | None = None,
+    audit_session_factory: AuditFactory = None,
 ) -> bytes:
     """Read an object's bytes, checking them against the recorded hash."""
     store = store or get_object_store()
-    record = await _require_reference(session, tenant_id, object_id)
+    record = await _require_reference(
+        session,
+        tenant_id,
+        object_id,
+        actor_id=actor_id,
+        audit_session_factory=audit_session_factory,
+    )
 
     data = await store.get(_location_of(record), record.object_key)
 
     if verify_hash and compute_content_hash(data) != record.content_hash:
+        # Substituted or corrupted bytes are a security event, not a miss.
+        await _audit(
+            session,
+            audit_session_factory,
+            tenant_id=tenant_id,
+            action=audit_actions.OBJECT_INTEGRITY_FAILED,
+            outcome=audit_actions.Outcome.FAILURE,
+            actor_id=actor_id,
+            resource_type=audit_actions.ResourceType.STORED_OBJECT,
+            resource_id=object_id,
+            context={"expected_sha256": record.content_hash},
+        )
         raise ObjectNotFoundError(
             "Stored object failed its integrity check and was not returned"
         )
@@ -297,6 +407,8 @@ async def signed_download_url(
     settings: Settings | None = None,
     expires_in: int | None = None,
     as_attachment: bool = True,
+    actor_id: uuid.UUID | None = None,
+    audit_session_factory: AuditFactory = None,
 ) -> str:
     """Mint a short-lived URL granting read access to one object.
 
@@ -307,19 +419,39 @@ async def signed_download_url(
     """
     settings = settings or get_settings()
     store = store or get_object_store()
-    record = await _require_reference(session, tenant_id, object_id)
+    record = await _require_reference(
+        session,
+        tenant_id,
+        object_id,
+        actor_id=actor_id,
+        audit_session_factory=audit_session_factory,
+    )
 
     ttl = expires_in or settings.storage_signed_url_ttl_seconds
     # A signed URL that outlives the session that issued it is a credential
     # nobody can revoke, so the ceiling is enforced here rather than trusted.
     ttl = max(1, min(ttl, settings.storage_signed_url_ttl_seconds))
 
-    return await store.signed_url(
+    url = await store.signed_url(
         _location_of(record),
         record.object_key,
         expires_in=ttl,
         download_filename=record.original_filename if as_attachment else None,
     )
+
+    # The URL itself is never recorded. It is a bearer credential for the
+    # object, and an audit log is precisely the wrong place to keep one.
+    await _audit(
+        session,
+        audit_session_factory,
+        tenant_id=tenant_id,
+        action=audit_actions.OBJECT_SIGNED_URL_ISSUED,
+        actor_id=actor_id,
+        resource_type=audit_actions.ResourceType.STORED_OBJECT,
+        resource_id=object_id,
+        context={"expires_in_seconds": ttl, "as_attachment": as_attachment},
+    )
+    return url
 
 
 async def delete(
@@ -329,6 +461,7 @@ async def delete(
     object_id: uuid.UUID,
     reason: str | None = None,
     store: ObjectStore | None = None,
+    actor_id: uuid.UUID | None = None,
 ) -> bool:
     """Remove the bytes and mark the reference deleted.
 
@@ -347,6 +480,18 @@ async def delete(
     with tenant_scope(tenant_id):
         record.is_deleted = True
         record.deletion_reason = reason
+        await _audit(
+            session,
+            None,
+            tenant_id=tenant_id,
+            action=audit_actions.OBJECT_DELETED,
+            actor_id=actor_id,
+            resource_type=audit_actions.ResourceType.STORED_OBJECT,
+            resource_id=object_id,
+            resource_label=record.original_filename,
+            before_state={"is_deleted": False},
+            after_state={"is_deleted": True, "reason": reason},
+        )
         await session.commit()
     return True
 

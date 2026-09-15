@@ -88,6 +88,26 @@ ACCESS_DENIED: Final = ActionSpec(
     "policy.access.denied", "A policy decision refused a request."
 )
 
+# --- Object storage ------------------------------------------------------
+OBJECT_STORED: Final = ActionSpec(
+    "storage.object.stored", "Bytes were written to object storage."
+)
+OBJECT_DELETED: Final = ActionSpec(
+    "storage.object.deleted", "An object's bytes were removed from storage."
+)
+OBJECT_SIGNED_URL_ISSUED: Final = ActionSpec(
+    "storage.object.signed_url_issued",
+    "A short-lived read URL was issued for an object.",
+)
+OBJECT_ACCESS_DENIED: Final = ActionSpec(
+    "storage.object.access_denied",
+    "An object was requested that this tenant cannot reach.",
+)
+OBJECT_INTEGRITY_FAILED: Final = ActionSpec(
+    "storage.object.integrity_check_failed",
+    "Stored bytes did not match their recorded hash and were withheld.",
+)
+
 # --- Audit itself --------------------------------------------------------
 AUDIT_READ: Final = ActionSpec("audit.event.read", "Audit records were queried.")
 
@@ -106,6 +126,11 @@ ALL_ACTIONS: Final[tuple[ActionSpec, ...]] = (
     TENANT_CREATED,
     POLICY_CREATED,
     ACCESS_DENIED,
+    OBJECT_STORED,
+    OBJECT_DELETED,
+    OBJECT_SIGNED_URL_ISSUED,
+    OBJECT_ACCESS_DENIED,
+    OBJECT_INTEGRITY_FAILED,
     AUDIT_READ,
 )
 
@@ -143,3 +168,4 @@ class ResourceType(StrEnum):
     TENANT = "policy.tenant"
     POLICY = "policy.policy"
     AUDIT_EVENT = "audit.event"
+    STORED_OBJECT = "storage.object"

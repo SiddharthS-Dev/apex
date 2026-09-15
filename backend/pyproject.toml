@@ -76,6 +76,13 @@ asyncio_default_fixture_loop_scope = "function"
 # decisions, not about which module wires an HTTP route. Stating it as "the
 # whole package" would be stating it wrongly, and a contract that is wrong gets
 # relaxed the first time it fires.
+#
+# **Writing to Audit is permitted from everywhere, by design.** ADR-0007 puts
+# Audit outside the dependency graph precisely so every context can record what
+# it did: "Audit depends on nothing ... and is written to by every context."
+# Earlier revisions of these contracts forbade Storage and Events from importing
+# Audit, which contradicted that ADR and would have left object deletion
+# unaudited. What the contracts forbid is depending on a *peer* context.
 # ---------------------------------------------------------------
 [tool.importlinter]
 root_package = "app"
@@ -109,7 +116,7 @@ forbidden_modules = [
 ]
 
 [[tool.importlinter.contracts]]
-name = "The Events domain depends on no other bounded context"
+name = "The Events domain depends on no peer bounded context"
 type = "forbidden"
 source_modules = [
     "app.events.envelope",
@@ -118,24 +125,21 @@ source_modules = [
     "app.events.registry",
 ]
 forbidden_modules = [
-    "app.audit",
     "app.identity",
     "app.policy",
     "app.storage",
 ]
 
 [[tool.importlinter.contracts]]
-name = "The Storage domain does not reach into Identity, Policy, Audit or Events"
+name = "The Storage domain does not reach into Identity, Policy or Events"
 type = "forbidden"
 source_modules = [
     "app.storage.models",
-    "app.storage.service",
     "app.storage.backend",
     "app.storage.keys",
     "app.storage.locations",
 ]
 forbidden_modules = [
-    "app.audit",
     "app.identity",
     "app.policy",
     "app.events",

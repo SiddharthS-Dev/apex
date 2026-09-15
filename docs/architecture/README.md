@@ -81,10 +81,11 @@ supports. Where requirements are not yet known — ontology attributes, gate
 authority mapping, tenancy isolation, the twelve trends, the ten APEX modules —
 the documents are **deliberately silent** rather than speculative.
 
-Fifteen such gaps are tracked in [assumptions.md](assumptions.md), each with
-its blast radius if the assumption proves wrong. Three of them are needed by
-Commits 005–007, which is the point at which building further without the full
-specification stops being safe.
+Twenty-two such gaps are tracked in [assumptions.md](assumptions.md), each with
+its blast radius if the assumption proves wrong, plus a note on which parts of
+the platform are deliberately framework-only until the specification lands.
 
-One has already been resolved: the tenancy isolation model (A-07) was confirmed
-and is now [ADR-0008](../adr/0008-shared-schema-multi-tenancy.md).
+Two are resolved: the tenancy isolation model
+([ADR-0008](../adr/0008-shared-schema-multi-tenancy.md)) and the authentication
+approach ([ADR-0009](../adr/0009-local-first-authentication.md)). The next
+blocker is **A-02**, the ontology entity model, which Commit 006 needs.

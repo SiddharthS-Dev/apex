@@ -146,6 +146,29 @@ repository layer applies to the query itself. This is the mechanism behind
 never loaded, so they cannot be leaked by a later code path that forgets to
 check — including graph traversal and AI context assembly.
 
+### The ABAC pipeline
+
+Policy evaluation is four separable stages, each in its own module, in
+dependency order:
+
+| Stage | Module | Responsibility |
+| --- | --- | --- |
+| **Policy definition** | `app/policy/models.py` | Tenants and rules, as tenant-scoped data. A condition names an attribute key, an operator and literal operands — it does not know what the attribute means. |
+| **Attribute resolution** | `app/policy/attributes.py` | Resolvers turn a request into facts, each owning one namespace so two can never contest an attribute. |
+| **Policy decision** | `app/policy/engine.py` | A **pure function** of request, attributes and policies. No I/O, no session, no globals beyond two registries. |
+| **Enforcement** | `app/policy/enforcement.py` | Turns a decision into an HTTP outcome. Default-deny: anything but `ALLOW` refuses. |
+
+The separation is what makes the evaluator exhaustively testable without a
+database or a web framework, and it is also what keeps tenant isolation
+intact — the engine never loads anything, so what it sees is entirely
+determined by the service layer, which loads under `tenant_scope`.
+
+Two registries are the extension points. New attribute domains arrive as
+**registered resolvers**; new comparisons — including any ordering-aware one —
+arrive as **registered operators**. Neither requires changing the evaluator or
+the schema, which is how classification, audience, geography and organisation
+can be added once their semantics are specified.
+
 ---
 
 ## Domain services
